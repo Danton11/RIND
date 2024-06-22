@@ -16,27 +16,28 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
     debug!("Packet size: {}", packet.len());
     debug!("Packet contents: {:?}", packet);
 
-    // Simplified DNS packet parsing
+    // Ensure the packet is at least 12 bytes long (minimum DNS header size)
     if packet.len() < 12 {
         error!("Packet too short: expected at least 12 bytes but got {}", packet.len());
         return Err(format!("Packet too short: expected at least 12 bytes but got {}", packet.len()).into());
     }
 
-    // Read the header
+    // Read the header fields from the packet
     let id = u16::from_be_bytes([packet[0], packet[1]]);
     let flags = u16::from_be_bytes([packet[2], packet[3]]);
     let qd_count = u16::from_be_bytes([packet[4], packet[5]]);
     let an_count = u16::from_be_bytes([packet[6], packet[7]]);
     let ns_count = u16::from_be_bytes([packet[8], packet[9]]);
     let ar_count = u16::from_be_bytes([packet[10], packet[11]]);
-    debug!("");
+    
     debug!("ID: {}, Flags: {}, QD Count: {}, AN Count: {}, NS Count: {}, AR Count: {}", id, flags, qd_count, an_count, ns_count, ar_count);
 
-    // Read the question section (only handling a single question)
+    // Only handle packets with a single question
     if qd_count != 1 {
         return Err("Multiple questions not supported".into());
     }
 
+    // Parse the question section of the packet
     let mut offset = 12;
     let (name, new_offset) = read_name(packet, offset)?;
     debug!("Parsed name: {}, new offset: {}", name, new_offset);
@@ -51,6 +52,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
         ).into());
     }
 
+    // Read the query type and class fields
     debug!("Reading query type and class at offset: {}", offset);
     let qtype = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
     let qclass = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]);
@@ -67,6 +69,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
         debug!("Parsed OPT name: {}, new offset: {}", opt_name, new_offset);
         offset = new_offset;
 
+        // Ensure the packet is long enough to contain the OPT record fields
         if packet.len() < offset + 10 {
             return Err(format!(
                 "Packet too short for OPT record, expected at least {} bytes but got {}",
@@ -75,6 +78,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
             ).into());
         }
 
+        // Read the OPT record fields
         let opt_type = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
         let opt_udp_payload_size = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]);
         let opt_extended_rcode = packet[offset + 4];
@@ -83,6 +87,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
         let opt_data_length = u16::from_be_bytes([packet[offset + 8], packet[offset + 9]]);
         offset += 10;
 
+        // Check if the record is indeed an OPT record
         if opt_type == 41 {
             has_opt = true;
             opt_payload_size = opt_udp_payload_size;
@@ -95,6 +100,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
     debug!("Remaining bytes in packet: {}", packet.len() - offset);
     debug!("Packet parsing completed");
 
+    // Return the parsed DNS query
     Ok(DnsQuery {
         id,
         flags,
@@ -149,17 +155,25 @@ fn read_name(packet: &[u8], mut offset: usize) -> Result<(String, usize), Box<dy
     let mut name = String::new();
     let start_offset = offset;
     loop {
+        // Read the length of the next label
         let len = *packet.get(offset).ok_or("Unexpected end of packet while reading name length")? as usize;
         debug!("Reading label length: {}, at offset: {}", len, offset);
+        
+        // Check for the end of the name (a zero-length label)
         if len == 0 {
             offset += 1; // Move past the zero-length label
             debug!("End of name at offset: {}", offset);
             break;
         }
+
+        // Append a dot to separate labels (except for the first label)
         if !name.is_empty() {
             name.push('.');
         }
+
         offset += 1;
+
+        // Ensure the packet is long enough to contain the label
         if packet.len() < offset + len {
             return Err(format!(
                 "Unexpected end of packet while reading name, expected at least {} bytes but got {}",
@@ -167,11 +181,15 @@ fn read_name(packet: &[u8], mut offset: usize) -> Result<(String, usize), Box<dy
                 packet.len()
             ).into());
         }
+
+        // Read the label and append it to the name
         let label = std::str::from_utf8(&packet[offset..offset + len])?;
         debug!("Read label: {}, at offset range: {}-{}", label, offset, offset + len);
         name.push_str(label);
         offset += len;
     }
+
+    // Calculate the total length of the name
     let name_len = offset - start_offset;
     debug!("Total name length: {}, final offset after name: {}", name_len, offset);
     Ok((name, offset))

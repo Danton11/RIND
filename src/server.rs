@@ -17,21 +17,26 @@ use crate::query;
 ///   - `Ok(())`: Indicates the server started successfully and is running.
 ///   - `Err(Box<dyn Error>)`: Indicates an error occurred while starting or running the server. The error is boxed and can be any type that implements the `Error` trait.
 pub async fn run(addr: &str) -> Result<(), Box<dyn Error>> {
+    // Bind the UDP socket to the specified address and wrap it in an Arc to allow shared ownership.
     let socket = Arc::new(UdpSocket::bind(addr).await?);
+    // Create an asynchronous channel for sending and receiving packets.
     let (tx, mut rx) = mpsc::channel::<(Vec<u8>, std::net::SocketAddr)>(1024);
 
     // Log that the server has successfully started
     info!("DNS server listening on {}", addr);
     info!("Server has successfully started");
 
-    // Spawn a task to handle incoming packets
+    // Clone the Arc to share the socket with the task that handles incoming packets.
     let socket_clone = Arc::clone(&socket);
     tokio::spawn(async move {
+        // Buffer to hold incoming packet data.
         let mut buf = vec![0u8; 512];
         loop {
+            // Asynchronously wait for an incoming packet.
             match socket_clone.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     debug!("Received packet from {}: {:?}", addr, &buf[..len]);
+                    // Send the packet data and the sender's address to the channel.
                     if tx.send((buf[..len].to_vec(), addr)).await.is_err() {
                         error!("Receiver dropped");
                         break;
@@ -44,9 +49,11 @@ pub async fn run(addr: &str) -> Result<(), Box<dyn Error>> {
         }
     });
 
-    // Handle packets
+    // Loop to handle packets received from the channel.
     while let Some((packet, addr)) = rx.recv().await {
+        // Clone the Arc to share the socket with the task that handles the packet.
         let socket_clone = Arc::clone(&socket);
+        // Spawn a new asynchronous task to handle the packet.
         tokio::spawn(async move {
             debug!("Spawning task to handle packet from {}",addr);
             handle_packet(packet, addr, socket_clone).await;
