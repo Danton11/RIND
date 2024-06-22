@@ -1,0 +1,6 @@
++www.example.com:93.184.216.34:86400:A:IN
+_service._tcp.example.com:93.184.216.34:86400:SRV:IN
+=example.com:93.184.216.34:86400:A:IN
+@example.com:93.184.216.34:10:86400:IN
+dan.com:192.0.2.1:60:A:IN
+.example.com:93.184.216.34:86400:NS:IN

@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::net::Ipv4Addr;
-use log::{debug, warn, error};
+use log::{debug,error};
 
 /// Parses a DNS packet from the given byte slice.
 ///
@@ -200,27 +200,14 @@ fn read_name(packet: &[u8], mut offset: usize) -> Result<(String, usize), Box<dy
 /// # Parameters
 /// - `query`: A `DnsQuery` struct representing the DNS query to respond to.
 /// - `ip`: An `Ipv4Addr` representing the IP address to include in the DNS response.
+/// - `response_code`: An `u8` representing the DNS response code.
+/// - `ttl`: A `u32` representing the TTL (Time To Live) of the DNS record.
+/// - `record_type`: A `String` representing the DNS record type.
+/// - `class`: A `String` representing the DNS record class.
 ///
 /// # Returns
 /// - `Vec<u8>`: A vector of bytes representing the DNS response packet.
-///
-/// # Example
-/// ```
-/// let query = DnsQuery {
-///     id: 1234,
-///     flags: 0x0100,
-///     questions: vec![
-///         Question {
-///             name: "example.com".to_string(),
-///             qtype: 1,
-///             qclass: 1,
-///         }
-///     ],
-/// };
-/// let ip = Ipv4Addr::new(93, 184, 216, 34);
-/// let response = build_response(query, ip);
-/// ```
-pub fn build_response(query: DnsQuery, ip: Ipv4Addr) -> Vec<u8> {
+pub fn build_response(query: DnsQuery, ip: Ipv4Addr, response_code: u8, ttl: u32, record_type: String, class: String) -> Vec<u8> {
     let mut response = Vec::new();
 
     // Header
@@ -229,11 +216,7 @@ pub fn build_response(query: DnsQuery, ip: Ipv4Addr) -> Vec<u8> {
     response.extend(&1u16.to_be_bytes()); // QDCOUNT
     response.extend(&1u16.to_be_bytes()); // ANCOUNT
     response.extend(&0u16.to_be_bytes()); // NSCOUNT
-    if query.has_opt {
-        response.extend(&1u16.to_be_bytes()); // ARCOUNT, include OPT record
-    } else {
-        response.extend(&0u16.to_be_bytes()); // ARCOUNT
-    }
+    response.extend(&1u16.to_be_bytes()); // ARCOUNT
 
     // Question
     for question in query.questions.iter() {
@@ -243,27 +226,26 @@ pub fn build_response(query: DnsQuery, ip: Ipv4Addr) -> Vec<u8> {
     }
 
     // Answer
-    for question in query.questions.iter() {
-        response.extend(encode_name(&question.name));
-        response.extend(&1u16.to_be_bytes()); // TYPE A
-        response.extend(&1u16.to_be_bytes()); // CLASS IN
-        response.extend(&60u32.to_be_bytes()); // TTL
-        response.extend(&4u16.to_be_bytes()); // RDLENGTH
-        response.extend(&ip.octets());
+    if response_code == 0 {
+        for question in query.questions.iter() {
+            response.extend(encode_name(&question.name));
+            response.extend(&1u16.to_be_bytes()); // TYPE A
+            response.extend(&1u16.to_be_bytes()); // CLASS IN
+            response.extend(&ttl.to_be_bytes()); // TTL
+            response.extend(&4u16.to_be_bytes()); // RDLENGTH
+            response.extend(&ip.octets());
+        }
     }
 
-    // Add OPT record to the response if it was present in the query
-    if query.has_opt {
-        response.extend(&[0u8][..]); // Name (root)
-        response.extend(&41u16.to_be_bytes()); // Type (OPT)
-        response.extend(&query.opt_payload_size.to_be_bytes()); // UDP payload size
-        response.extend(&0u32.to_be_bytes()); // Extended RCODE and flags
-        response.extend(&0u16.to_be_bytes()); // RDLENGTH
-    }
+    // Add OPT record to the response
+    response.extend(&[0u8][..]); // Name (root)
+    response.extend(&41u16.to_be_bytes()); // Type (OPT)
+    response.extend(&4096u16.to_be_bytes()); // UDP payload size
+    response.extend(&0u32.to_be_bytes()); // Extended RCODE and flags
+    response.extend(&0u16.to_be_bytes()); // RDLENGTH
 
     response
 }
-
 /// Encodes a domain name into the DNS wire format.
 ///
 /// # Parameters
@@ -280,4 +262,3 @@ fn encode_name(name: &str) -> Vec<u8> {
     encoded.push(0);
     encoded
 }
-

@@ -1,0 +1,27 @@
+# Host A record
+=example.com:93.184.216.34:86400:A:IN
+
+# Alias A record
++www.example.com:93.184.216.34:86400:A:IN
+
+# Mail exchanger MX record
+@example.com:93.184.216.34:10:86400:IN
+
+# Name server NS record
+.example.com:93.184.216.34:86400:NS:IN
+
+# Canonical name CNAME record
+Cftp.example.com:www.example.com:86400:IN
+
+# Text TXT record
+'txt.example.com:v=spf1 include:_spf.example.com ~all:86400:IN
+
+# Pointer PTR record
+^34.216.184.93.in-addr.arpa:example.com:86400:IN
+
+# Service SRV record
+_service._tcp.example.com:93.184.216.34:86400:SRV:IN
+
+# SOA record
+Zexample.com:a.ns.example.com:hostmaster.example.com:2024062200:86400:7200:3600000:172800:86400:IN
+
