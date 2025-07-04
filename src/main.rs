@@ -1,7 +1,7 @@
 use warp::Filter;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::{info, debug, error};
+use log::{info, error};
 
 mod server;
 mod packet;
@@ -17,12 +17,14 @@ async fn main() {
     let addr = "127.0.0.1:12312";
     let api_addr = "127.0.0.1:8080";
     
+    // Load DNS records and create shared references
     let records = update::load_records(DNS_RECORDS_FILE);
-    let records_for_filter = Arc::clone(&records); // Clone Arc for use in warp filter
-    let records_for_server = Arc::clone(&records); // Clone Arc for use in server
+    let records_for_filter = Arc::clone(&records);
+    let records_for_server = Arc::clone(&records);
 
     let records_filter = warp::any().map(move || Arc::clone(&records_for_filter));
     
+    // API route for updating DNS records
     let update_route = warp::path("update")
         .and(warp::post())
         .and(warp::body::json())
@@ -34,18 +36,15 @@ async fn main() {
             warp::reply::reply()
         });
 
-    // Use a tokio task to run the API server
+    // Start API server in background
     let api_server = async {
         warp::serve(update_route).run(api_addr.parse::<std::net::SocketAddr>().unwrap()).await;
     };
 
-    // Log that the API server has successfully started
     info!("API server listening on {}", api_addr);
-
-    // Spawn the API server task
     tokio::spawn(api_server);
 
-    // Run the DNS server
+    // Run DNS server
     if let Err(e) = server::run(addr, records_for_server).await {
         error!("Server error: {}", e);
     }

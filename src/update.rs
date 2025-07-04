@@ -27,14 +27,14 @@ pub fn load_records_from_file(file_path: &str) -> Result<DnsRecords, Box<dyn std
     for line in reader.lines() {
         let line = line?.trim().to_string();
         if line.is_empty() || line.starts_with('#') {
-            continue; // Skip empty lines and comments
+            continue;
         }
+        
         let parts: Vec<&str> = line.split(':').collect();
+        
+        // Standard A record: name:ip:ttl:type:class
         if parts.len() >= 5 {
-            let ip = match parts[1].parse::<Ipv4Addr>() {
-                Ok(ip) => Some(ip),
-                Err(_) => None, // If IP parsing fails, set it to None
-            };
+            let ip = parts[1].parse::<Ipv4Addr>().ok();
             let ttl = parts[2].parse::<u32>().map_err(|e| {
                 error!("Failed to parse TTL for line {}: {}", line, e);
                 e
@@ -48,34 +48,32 @@ pub fn load_records_from_file(file_path: &str) -> Result<DnsRecords, Box<dyn std
                 value: None,
             };
             records.insert(record.name.clone(), record);
-        } else if parts.len() == 4 && parts[0].starts_with('C') { // Special case for CNAME
+        }
+        // CNAME record
+        else if parts.len() == 4 && parts[0].starts_with('C') {
             let record = DnsRecord {
                 name: parts[0].to_string(),
                 ip: None,
-                ttl: parts[2].parse::<u32>().map_err(|e| {
-                    error!("Failed to parse TTL for line {}: {}", line, e);
-                    e
-                })?,
+                ttl: parts[2].parse::<u32>()?,
                 record_type: "CNAME".to_string(),
                 class: parts[3].to_string(),
-                value: Some(parts[1].to_string()), // CNAME value
+                value: Some(parts[1].to_string()),
             };
             records.insert(record.name.clone(), record);
-        } else if parts.len() == 5 && parts[0].starts_with('\'') { // Special case for TXT
+        }
+        // TXT record
+        else if parts.len() == 5 && parts[0].starts_with('\'') {
             let record = DnsRecord {
                 name: parts[0].to_string(),
                 ip: None,
-                ttl: parts[2].parse::<u32>().map_err(|e| {
-                    error!("Failed to parse TTL for line {}: {}", line, e);
-                    e
-                })?,
+                ttl: parts[2].parse::<u32>()?,
                 record_type: "TXT".to_string(),
                 class: parts[4].to_string(),
-                value: Some(parts[1].to_string()), // TXT value
+                value: Some(parts[1].to_string()),
             };
             records.insert(record.name.clone(), record);
         } else {
-            error!("Invalid record format for line: {}", line);
+            error!("Invalid record format: {}", line);
         }
     }
     Ok(records)
@@ -86,16 +84,18 @@ pub fn save_records_to_file(file_path: &str, records: &DnsRecords) -> Result<(),
     let mut writer = BufWriter::new(file);
 
     for record in records.values() {
-        writeln!(
-            writer,
-            "{}:{}:{}:{}:{}{}",
-            record.name,
-            record.ip.map_or_else(|| record.value.clone().unwrap_or_default(), |ip| ip.to_string()), // Handle None IP case
-            record.ttl,
-            record.record_type,
-            record.class,
-            record.value.as_ref().map_or("".to_string(), |v| format!(":{}", v))
-        )?;
+        let ip_or_value = record.ip
+            .map(|ip| ip.to_string())
+            .or_else(|| record.value.clone())
+            .unwrap_or_default();
+        
+        let extra_value = record.value.as_ref()
+            .map(|v| format!(":{}", v))
+            .unwrap_or_default();
+
+        writeln!(writer, "{}:{}:{}:{}:{}{}", 
+            record.name, ip_or_value, record.ttl, 
+            record.record_type, record.class, extra_value)?;
     }
     writer.flush()?;
     Ok(())
@@ -118,4 +118,6 @@ pub async fn update_record(records: Arc<RwLock<DnsRecords>>, new_record: DnsReco
     debug!("Current records: {:?}", *records);
     save_records_to_file("dns_records.txt", &*records).expect("Failed to save DNS records");
 }
+
+
 
