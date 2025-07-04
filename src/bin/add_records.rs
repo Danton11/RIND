@@ -3,7 +3,10 @@ use serde_json::json;
 use std::error::Error;
 use tokio;
 
-const API_URL: &str = "http://127.0.0.1:8080/update";
+fn get_api_url() -> String {
+    let api_addr = std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    format!("http://{}/update", api_addr)
+}
 
 #[derive(Debug)]
 struct DnsRecord {
@@ -37,7 +40,7 @@ async fn add_record(client: &reqwest::Client, record: &DnsRecord) -> Result<(), 
     });
 
     let response = client
-        .post(API_URL)
+        .post(&get_api_url())
         .json(&payload)
         .send()
         .await?;

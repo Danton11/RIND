@@ -14,8 +14,8 @@ const DNS_RECORDS_FILE: &str = "dns_records.txt";
 async fn main() {
     env_logger::init();
 
-    let addr = "127.0.0.1:12312";
-    let api_addr = "127.0.0.1:8080";
+    let addr = std::env::var("DNS_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string());
+    let api_addr = std::env::var("API_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     
     // Load DNS records and create shared references
     let records = update::load_records(DNS_RECORDS_FILE);
@@ -37,15 +37,16 @@ async fn main() {
         });
 
     // Start API server in background
-    let api_server = async {
-        warp::serve(update_route).run(api_addr.parse::<std::net::SocketAddr>().unwrap()).await;
+    let api_addr_clone = api_addr.clone();
+    let api_server = async move {
+        warp::serve(update_route).run(api_addr_clone.parse::<std::net::SocketAddr>().unwrap()).await;
     };
 
     info!("API server listening on {}", api_addr);
     tokio::spawn(api_server);
 
     // Run DNS server
-    if let Err(e) = server::run(addr, records_for_server).await {
+    if let Err(e) = server::run(&addr, records_for_server).await {
         error!("Server error: {}", e);
     }
 }

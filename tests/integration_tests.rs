@@ -8,8 +8,13 @@ use rind::packet::{parse, build_response, DnsQuery, Question};
 use rind::update::{DnsRecord, DnsRecords, update_record};
 use rind::server::run;
 
-const DNS_SERVER_ADDR: &str = "127.0.0.1:12312";
-const API_SERVER_ADDR: &str = "127.0.0.1:8080";
+fn get_dns_server_addr() -> String {
+    std::env::var("DNS_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string())
+}
+
+fn get_api_server_addr() -> String {
+    std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string())
+}
 
 fn create_dns_query_packet(domain: &str) -> Vec<u8> {
     let mut packet = vec![
@@ -40,7 +45,7 @@ async fn send_dns_query(domain: &str) -> Result<Vec<u8>, Box<dyn std::error::Err
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     
     let packet = create_dns_query_packet(domain);
-    let server_addr: SocketAddr = DNS_SERVER_ADDR.parse()?;
+    let server_addr: SocketAddr = get_dns_server_addr().parse()?;
     
     socket.send_to(&packet, server_addr)?;
     
@@ -63,7 +68,7 @@ async fn add_dns_record_via_api(name: &str, ip: &str) -> Result<(), Box<dyn std:
     });
     
     let response = client
-        .post(&format!("http://{}/update", API_SERVER_ADDR))
+        .post(&format!("http://{}/update", get_api_server_addr()))
         .json(&record)
         .send()
         .await?;
@@ -165,7 +170,7 @@ async fn test_malformed_packets() {
     let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
     socket.set_read_timeout(Some(Duration::from_millis(1000))).expect("Failed to set timeout");
     
-    let server_addr: SocketAddr = DNS_SERVER_ADDR.parse().expect("Invalid server address");
+    let server_addr: SocketAddr = get_dns_server_addr().parse().expect("Invalid server address");
     
     let malformed_packets = vec![
         vec![], // Empty packet

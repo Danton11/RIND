@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  dns-server-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rind-dns-dev
+    ports:
+      - "12312:12312/udp"
+      - "8080:8080/tcp"
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - target_cache:/app/target
+    environment:
+      - RUST_LOG=debug
+      - CARGO_INCREMENTAL=1
+    working_dir: /app
+    command: ["cargo", "watch", "-x", "run"]
+    networks:
+      - dns-dev-network
+    stdin_open: true
+    tty: true
+
+  # Development testing environment
+  test-runner-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rind-test-dev
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - target_cache:/app/target
+    working_dir: /app
+    command: ["cargo", "test"]
+    depends_on:
+      - dns-server-dev
+    networks:
+      - dns-dev-network
+    profiles:
+      - testing
+
+volumes:
+  cargo_cache:
+  target_cache:
+
+networks:
+  dns-dev-network:
+    driver: bridge

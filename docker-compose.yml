@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  dns-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rind-dns-server
+    ports:
+      - "12312:12312/udp"  # DNS port
+      - "8080:8080/tcp"    # API port
+    volumes:
+      - dns_data:/app/data
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    networks:
+      - dns-network
+    healthcheck:
+      test: ["CMD", "timeout", "5s", "bash", "-c", "</dev/tcp/localhost/8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: DNS testing container
+  dns-tester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rind-dns-tester
+    command: ["./test_runner"]
+    depends_on:
+      - dns-server
+    networks:
+      - dns-network
+    profiles:
+      - testing
+
+  # Optional: Record management utility
+  record-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rind-record-manager
+    command: ["./add_records"]
+    depends_on:
+      - dns-server
+    networks:
+      - dns-network
+    profiles:
+      - utilities
+
+volumes:
+  dns_data:
+    driver: local
+
+networks:
+  dns-network:
+    driver: bridge

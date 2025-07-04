@@ -4,11 +4,14 @@ use std::net::{TcpStream, UdpSocket};
 
 
 fn check_server_connectivity() -> bool {
+    let dns_addr = std::env::var("DNS_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string());
+    let api_addr = std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    
     // Check DNS port (UDP)
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("127.0.0.1:12312").is_ok() {
+        if socket.connect(&dns_addr).is_ok() {
             // Check API port (TCP)
-            return TcpStream::connect("127.0.0.1:8080").is_ok();
+            return TcpStream::connect(&api_addr).is_ok();
         }
     }
     false

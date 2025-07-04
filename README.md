@@ -15,9 +15,12 @@ A high-performance DNS server implementation in Rust with real-time API updates 
 
 ### Prerequisites
 
-- Rust 1.70+ (that's it!)
+- **Native**: Rust 1.70+
+- **Docker**: Docker Engine 20.10+
 
 ### Running the Server
+
+#### Option 1: Native (Development)
 
 ```bash
 # Clone and build
@@ -28,6 +31,22 @@ cargo run
 # Server will start on:
 # - DNS: UDP 127.0.0.1:12312  
 # - API: HTTP 127.0.0.1:8080
+```
+
+#### Option 2: Docker (Production)
+
+```bash
+# Build and run with Docker
+docker build -t rind-dns:latest .
+docker run -d --name rind-server \
+  -p 12312:12312/udp \
+  -p 8080:8080/tcp \
+  -e DNS_BIND_ADDR="0.0.0.0:12312" \
+  -e API_BIND_ADDR="0.0.0.0:8080" \
+  rind-dns:latest
+
+# Check status
+docker logs rind-server
 ```
 
 ### Adding DNS Records
@@ -147,6 +166,71 @@ localhost:127.0.0.1:86400:A:IN
 ```
 
 Format: `name:ip:ttl:type:class`
+
+## Docker Deployment
+
+### 🐳 Quick Docker Setup
+
+```bash
+# 1. Build the image
+docker build -t rind-dns:latest .
+
+# 2. Run the container
+docker run -d --name rind-server \
+  -p 12312:12312/udp \
+  -p 8080:8080/tcp \
+  -e DNS_BIND_ADDR="0.0.0.0:12312" \
+  -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e RUST_LOG=info \
+  rind-dns:latest
+
+# 3. Test the deployment
+curl -X POST http://127.0.0.1:8080/update \
+  -H "Content-Type: application/json" \
+  -d '{"name": "docker-test.com", "ip": "192.168.1.100", "ttl": 300, "record_type": "A", "class": "IN", "value": null}'
+
+dig @127.0.0.1 -p 12312 docker-test.com
+```
+
+### 📚 Complete Docker Guide
+
+For comprehensive Docker documentation including:
+- **Setup & Configuration** - Environment variables, port mapping, volumes
+- **Testing & Monitoring** - Health checks, performance testing, debugging
+- **Troubleshooting** - Common issues and solutions
+- **Cleanup & Teardown** - Complete removal procedures
+
+**👉 See [DOCKER.md](DOCKER.md) for the complete guide**
+
+### 🐳 Docker Compose (Quick Start)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  dns-server:
+    build: .
+    container_name: rind-dns-server
+    ports:
+      - "12312:12312/udp"
+      - "8080:8080/tcp"
+    environment:
+      - DNS_BIND_ADDR=0.0.0.0:12312
+      - API_BIND_ADDR=0.0.0.0:8080
+      - RUST_LOG=info
+    restart: unless-stopped
+```
+
+```bash
+# Start with compose
+docker-compose up -d
+
+# Run tests against container
+cargo run --bin test_runner
+
+# Cleanup
+docker-compose down
+```
 
 ## Architecture
 
