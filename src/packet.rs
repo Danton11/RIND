@@ -121,11 +121,19 @@ pub fn build_response(query: DnsQuery, ip: Ipv4Addr, response_code: u8, ttl: u32
 
     // Header
     response.extend(&query.id.to_be_bytes());
-    response.extend(&(query.flags | 0x8000).to_be_bytes()); // Set response flag
+    // Set response flag (0x8000) and response code in lower 4 bits
+    let flags_with_rcode = (query.flags | 0x8000) | (response_code as u16);
+    response.extend(&flags_with_rcode.to_be_bytes());
     response.extend(&1u16.to_be_bytes()); // QDCOUNT
-    response.extend(&1u16.to_be_bytes()); // ANCOUNT
+    // ANCOUNT should be 1 only if we have a successful response (response_code == 0)
+    let ancount = if response_code == 0 { 1u16 } else { 0u16 };
+    response.extend(&ancount.to_be_bytes()); // ANCOUNT
+    
+    debug!("Building response: response_code={}, ancount={}", response_code, ancount);
     response.extend(&0u16.to_be_bytes()); // NSCOUNT
     response.extend(&1u16.to_be_bytes()); // ARCOUNT
+    
+    debug!("Building response: response_code={}, ancount={}", response_code, ancount);
 
     // Question
     for question in query.questions.iter() {

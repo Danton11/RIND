@@ -76,8 +76,10 @@ docker build -f Dockerfile.dev -t rind-dns:dev .
 docker run -d --name rind-server \
   -p 12312:12312/udp \
   -p 8080:8080/tcp \
+  -p 9090:9090/tcp \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e METRICS_PORT="9090" \
   rind-dns:latest
 ```
 
@@ -88,8 +90,10 @@ docker run -d --name rind-server \
 docker run -d --name rind-dns-prod \
   -p 12312:12312/udp \
   -p 8080:8080/tcp \
+  -p 9090:9090/tcp \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e METRICS_PORT="9090" \
   -e RUST_LOG=info \
   --restart unless-stopped \
   --memory="256m" \
@@ -109,8 +113,10 @@ docker run -d --name rind-dns-prod \
 docker run -d --name rind-dev \
   -p 12312:12312/udp \
   -p 8080:8080/tcp \
+  -p 9090:9090/tcp \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e METRICS_PORT="9090" \
   -e RUST_LOG=debug \
   -v $(pwd):/app \
   -v cargo_cache:/usr/local/cargo/registry \
@@ -270,6 +276,18 @@ docker exec rind-server ps aux 2>/dev/null || echo "ps not available in containe
 ### Application Metrics
 
 ```bash
+# Prometheus metrics endpoint
+curl -s http://127.0.0.1:9090/metrics | head -20
+
+# DNS query metrics
+curl -s http://127.0.0.1:9090/metrics | grep dns_queries_total
+
+# Response code metrics
+curl -s http://127.0.0.1:9090/metrics | grep dns_responses_total
+
+# Error metrics
+curl -s http://127.0.0.1:9090/metrics | grep -E "(dns_nxdomain_total|dns_servfail_total|dns_packet_errors_total)"
+
 # DNS records count
 docker exec rind-server wc -l dns_records.txt
 

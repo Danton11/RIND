@@ -56,8 +56,10 @@ docker build -t rind-dns:latest .
 docker run -d --name rind-dns-server \
   -p 12312:12312/udp \
   -p 8080:8080/tcp \
+  -p 9090:9090/tcp \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e METRICS_PORT="9090" \
   -e RUST_LOG=info \
   --restart unless-stopped \
   --memory="256m" \
@@ -297,11 +299,14 @@ ssh user@remote-host "docker stats rind-dns-server"
 
 - **12312/udp**: DNS queries
 - **8080/tcp**: REST API for record management
+- **9090/tcp**: Prometheus metrics endpoint
 
 ### Environment Variables
 
 - `DNS_BIND_ADDR`: DNS server bind address (use "0.0.0.0:12312" for remote access)
 - `API_BIND_ADDR`: API server bind address (use "0.0.0.0:8080" for remote access)
+- `METRICS_PORT`: Metrics server port (default: 9090)
+- `SERVER_ID`: Server instance identifier for metrics labels
 - `RUST_LOG`: Logging level (debug, info, warn, error)
 
 ## 🧹 Cleanup and Removal

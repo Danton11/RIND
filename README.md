@@ -10,6 +10,7 @@ A high-performance DNS server implementation in Rust with real-time API updates 
 - 🔄 **Live Updates**: REST API for dynamic DNS record management
 - 📊 **Production Ready**: Comprehensive test suite with stress testing
 - 🎯 **Protocol Compliant**: Full DNS protocol implementation
+- 📈 **Comprehensive Metrics**: Prometheus-compatible metrics with query tracking, latency measurement, and error monitoring
 
 ## Quick Start
 
@@ -31,6 +32,7 @@ cargo run
 # Server will start on:
 # - DNS: UDP 127.0.0.1:12312  
 # - API: HTTP 127.0.0.1:8080
+# - Metrics: HTTP 127.0.0.1:9090/metrics
 ```
 
 #### Option 2: Docker (Production)
@@ -41,8 +43,10 @@ docker build -t rind-dns:latest .
 docker run -d --name rind-server \
   -p 12312:12312/udp \
   -p 8080:8080/tcp \
+  -p 9090:9090/tcp \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
+  -e METRICS_PORT="9090" \
   rind-dns:latest
 
 # Check status
@@ -60,6 +64,27 @@ curl -X POST http://127.0.0.1:8080/update \
 # Query the record
 dig @127.0.0.1 -p 12312 example.com
 ```
+
+### Monitoring and Metrics
+
+The server exposes comprehensive Prometheus-compatible metrics for monitoring:
+
+```bash
+# View all metrics
+curl http://127.0.0.1:9090/metrics
+
+# Key metrics include:
+# - dns_queries_total{query_type="A",instance="dns-server-123"} - Query counters by type
+# - dns_responses_total{response_code="NOERROR",instance="dns-server-123"} - Response counters by code  
+# - dns_query_duration_seconds - Query processing latency histogram
+# - dns_nxdomain_total - NXDOMAIN response counter
+# - dns_servfail_total - SERVFAIL response counter
+# - dns_packet_errors_total - Packet parsing error counter
+```
+
+**Environment Variables:**
+- `METRICS_PORT`: Metrics server port (default: 9090)
+- `SERVER_ID`: Server instance identifier for metrics labels
 
 ## Performance Metrics
 
@@ -79,7 +104,8 @@ RIND/
 │   ├── server.rs          # DNS server implementation  
 │   ├── packet.rs          # DNS packet parsing/building
 │   ├── query.rs           # Query handling logic
-│   └── update.rs          # Record management & file I/O
+│   ├── update.rs          # Record management & file I/O
+│   └── metrics.rs         # Prometheus metrics & logging
 ├── tests/                 # Comprehensive test suite
 │   ├── unit_packet_tests.rs    # DNS packet unit tests
 │   ├── unit_update_tests.rs    # Record management unit tests  
