@@ -27,12 +27,32 @@ A high-performance DNS server implementation in Rust with real-time API updates 
 # Clone and build
 git clone <repository>
 cd RIND
-cargo run
+cargo build --release
+
+# Basic run (logs to files in logs/ directory)
+cargo run --bin rind
+
+# Run with specific log level
+LOG_LEVEL=info cargo run --bin rind
+
+# Run with debug logging
+LOG_LEVEL=debug cargo run --bin rind
+
+# Run with JSON formatted logs (production)
+LOG_FORMAT=json LOG_LEVEL=info cargo run --bin rind
+
+# Run with custom server configuration
+DNS_BIND_ADDR="127.0.0.1:12312" \
+API_BIND_ADDR="127.0.0.1:8080" \
+METRICS_PORT="9090" \
+LOG_LEVEL=info \
+cargo run --bin rind
 
 # Server will start on:
 # - DNS: UDP 127.0.0.1:12312  
 # - API: HTTP 127.0.0.1:8080
 # - Metrics: HTTP 127.0.0.1:9090/metrics
+# - Logs: Written to logs/rind_YYYY-MM-DD_HH-MM-SS.log
 ```
 
 #### Option 2: Docker (Production)
@@ -47,6 +67,9 @@ docker run -d --name rind-server \
   -e DNS_BIND_ADDR="0.0.0.0:12312" \
   -e API_BIND_ADDR="0.0.0.0:8080" \
   -e METRICS_PORT="9090" \
+  -e LOG_LEVEL="info" \
+  -e LOG_FORMAT="json" \
+  -v $(pwd)/logs:/app/logs \
   rind-dns:latest
 
 # Check status
@@ -85,6 +108,32 @@ curl http://127.0.0.1:9090/metrics
 **Environment Variables:**
 - `METRICS_PORT`: Metrics server port (default: 9090)
 - `SERVER_ID`: Server instance identifier for metrics labels
+
+**📊 For detailed metrics documentation, see [METRICS.md](METRICS.md)**
+
+### Logging Configuration
+
+The server writes logs to timestamped files in the `logs/` directory:
+
+```bash
+# Log files are automatically created with format:
+logs/rind_2025-01-07_14-30-45.log
+
+# Configure log level (trace, debug, info, warn, error)
+LOG_LEVEL=debug cargo run --bin rind
+
+# Configure log format (text for development, json for production)
+LOG_FORMAT=json cargo run --bin rind
+
+# Example production logging setup
+LOG_LEVEL=info LOG_FORMAT=json cargo run --bin rind
+```
+
+**Logging Environment Variables:**
+- `LOG_LEVEL`: Set logging verbosity (default: info)
+- `LOG_FORMAT`: Choose format - `text` or `json` (default: text)
+
+**Log File Location:** All logs are written to `logs/rind_YYYY-MM-DD_HH-MM-SS.log`
 
 ## Performance Metrics
 
@@ -243,7 +292,10 @@ services:
     environment:
       - DNS_BIND_ADDR=0.0.0.0:12312
       - API_BIND_ADDR=0.0.0.0:8080
-      - RUST_LOG=info
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped
 ```
 
@@ -258,6 +310,17 @@ cargo run --bin test_runner
 docker-compose down
 ```
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DNS_BIND_ADDR` | `127.0.0.1:12312` | DNS server bind address |
+| `API_BIND_ADDR` | `127.0.0.1:8080` | API server bind address |
+| `METRICS_PORT` | `9090` | Metrics server port |
+| `SERVER_ID` | `dns-server-{pid}` | Server instance identifier |
+| `LOG_LEVEL` | `info` | Log level (trace, debug, info, warn, error) |
+| `LOG_FORMAT` | `text` | Log format (text, json) |
+
 ## Architecture
 
 - **Async/Await**: Built on Tokio for high concurrency
@@ -265,6 +328,7 @@ docker-compose down
 - **HTTP API**: Warp-based REST API on port 8080  
 - **Shared State**: Arc<RwLock> for thread-safe record access
 - **File Persistence**: Automatic saving to dns_records.txt
+- **File Logging**: Timestamped log files in logs/ directory
 
 ## Contributing
 
