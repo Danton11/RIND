@@ -20,7 +20,7 @@ fn setup_file_logging() -> Result<(), Box<dyn std::error::Error>> {
     
     // Generate timestamp for log filename
     let now: DateTime<Utc> = Utc::now();
-    let timestamp = now.format("%Y-%m-%d_%H-%M-%S");
+    let timestamp = now.format("%Y-%m-%d_%H");
     let log_filename = format!("logs/rind_{}.log", timestamp);
     
     // Create file appender
