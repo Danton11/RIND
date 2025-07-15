@@ -114,7 +114,7 @@ async fn main() {
         });
 
     // Start metrics server in background
-    let metrics_addr = format!("127.0.0.1:{}", metrics_port);
+    let metrics_addr = format!("0.0.0.0:{}", metrics_port);
     let metrics_server = metrics::MetricsServer::new(Arc::clone(&metrics_registry));
     let metrics_addr_clone = metrics_addr.clone();
     

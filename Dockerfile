@@ -54,7 +54,7 @@ RUN chown -R appuser:appuser /app
 USER appuser
 
 # Expose ports
-EXPOSE 12312/udp 8080/tcp
+EXPOSE 12312/udp 8080/tcp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

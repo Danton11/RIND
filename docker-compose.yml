@@ -9,10 +9,14 @@ services:
     ports:
       - "12312:12312/udp"  # DNS port
       - "8080:8080/tcp"    # API port
+      - "9090:9090/tcp"    # Metrics port
     volumes:
       - dns_data:/app/data
     environment:
       - RUST_LOG=info
+      - DNS_BIND_ADDR=0.0.0.0:12312
+      - API_BIND_ADDR=0.0.0.0:8080
+      - METRICS_PORT=9090
     restart: unless-stopped
     networks:
       - dns-network
