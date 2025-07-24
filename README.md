@@ -111,13 +111,13 @@ curl http://127.0.0.1:9090/metrics
 
 **📊 For detailed metrics documentation, see [METRICS.md](METRICS.md)**
 
-### Logging Configuration
+### Comprehensive Structured Logging
 
-The server writes logs to timestamped files in the `logs/` directory:
+The server features comprehensive structured logging with tracing spans and rich contextual information, writing logs to timestamped files in the `logs/` directory:
 
 ```bash
 # Log files are automatically created with format:
-logs/rind_2025-01-07_14-30-45.log
+logs/rind_2025-07-24_13.log
 
 # Configure log level (trace, debug, info, warn, error)
 LOG_LEVEL=debug cargo run --bin rind
@@ -129,11 +129,64 @@ LOG_FORMAT=json cargo run --bin rind
 LOG_LEVEL=info LOG_FORMAT=json cargo run --bin rind
 ```
 
+#### Structured Log Features
+
+**DNS Query Processing Logs:**
+```
+2025-07-24T12:48:22.291594Z  INFO ThreadId(07) rind::server: DNS query processed successfully 
+client_addr=192.168.65.1:17426 query_id=46562 query_type="A" query_name=example.com 
+response_code=0 response_code_str="NOERROR" processing_time_ms=1.2 response_size=65 
+instance_id=dns-server-1
+```
+
+**Error Logging with Context:**
+```
+2025-07-24T12:49:57.979727Z ERROR ThreadId(07) rind::server: Failed to parse DNS packet 
+client_addr=192.168.65.1:24587 packet_size=2 error="Packet too short: 2 bytes" 
+processing_time_ms=3.0 instance_id=dns-server-1 packet_hex=1234
+```
+
+**Server Startup with Spans:**
+```
+2025-07-24T12:48:12.100746Z  INFO ThreadId(01) dns_server{bind_addr=0.0.0.0:12312}: 
+DNS server started successfully instance_id=dns-server-1 bind_addr=0.0.0.0:12312 
+channel_capacity=1024
+```
+
+#### Log Levels and Content
+
+- **INFO**: Successful DNS queries, server startup, API operations
+- **DEBUG**: NXDOMAIN responses, detailed query processing steps
+- **WARN**: Non-standard response codes, potential issues
+- **ERROR**: Packet parsing failures, network errors, critical issues
+- **TRACE**: Detailed packet-level debugging, performance traces
+
+#### Structured Fields
+
+All DNS operation logs include:
+- **Client Context**: `client_addr`, `query_id`
+- **Query Details**: `query_type`, `query_name`, `question_count`
+- **Response Information**: `response_code`, `response_code_str`, `response_size`
+- **Performance Metrics**: `processing_time_ms`, `total_time_ms`
+- **Instance Identification**: `instance_id`, `handler_id`
+- **Error Context**: `error`, `packet_hex` (for debugging malformed packets)
+
+#### Tracing Spans
+
+Hierarchical spans provide context for different processing phases:
+- `dns_server`: Top-level server operations
+- `packet_receiver`: UDP packet reception
+- `packet_handler`: Individual packet processing
+- `packet_parsing`: DNS packet parsing
+- `query_processing`: Query resolution
+- `response_transmission`: Response sending
+
 **Logging Environment Variables:**
 - `LOG_LEVEL`: Set logging verbosity (default: info)
 - `LOG_FORMAT`: Choose format - `text` or `json` (default: text)
+- `SERVER_ID`: Server instance identifier for log correlation
 
-**Log File Location:** All logs are written to `logs/rind_YYYY-MM-DD_HH-MM-SS.log`
+**Log File Location:** All logs are written to `logs/rind_YYYY-MM-DD_HH.log`
 
 ## Performance Metrics
 
@@ -265,6 +318,10 @@ curl -X POST http://127.0.0.1:8080/update \
   -d '{"name": "docker-test.com", "ip": "192.168.1.100", "ttl": 300, "record_type": "A", "class": "IN", "value": null}'
 
 dig @127.0.0.1 -p 12312 docker-test.com
+
+# 4. View structured logs
+docker exec rind-server ls logs/                    # List log files
+docker exec rind-server cat logs/rind_YYYY-MM-DD_HH.log  # View logs
 ```
 
 ### 📚 Complete Docker Guide
@@ -305,6 +362,9 @@ docker-compose up -d
 
 # Run tests against container
 cargo run --bin test_runner
+
+# View structured logs
+docker exec rind-dns-server cat logs/rind_YYYY-MM-DD_HH.log
 
 # Cleanup
 docker-compose down

@@ -140,10 +140,39 @@ Run tests with:
 cargo test --lib server::tests
 ```
 
+## Structured Logging Integration
+
+The metrics system is fully integrated with comprehensive structured logging:
+
+### Log-Metrics Correlation
+- All DNS operations generate both metrics and structured logs
+- Shared `instance_id` for correlating metrics with log entries
+- Performance metrics (processing time) available in both systems
+
+### Structured Log Fields
+DNS operation logs include metrics-compatible fields:
+```
+client_addr=192.168.65.1:17426 query_id=46562 query_type="A" query_name=example.com 
+response_code=0 response_code_str="NOERROR" processing_time_ms=1.2 response_size=65 
+instance_id=dns-server-1
+```
+
+### Log File Location
+Structured logs are written to timestamped files:
+- **Format**: `logs/rind_YYYY-MM-DD_HH.log`
+- **Content**: JSON or text format based on `LOG_FORMAT` environment variable
+- **Levels**: INFO (successful operations), DEBUG (NXDOMAIN), ERROR (failures)
+
+### Monitoring Integration
+```bash
+# View metrics and logs together
+curl -s http://127.0.0.1:9090/metrics | grep dns_queries_total
+docker exec rind-server grep 'query_type="A"' logs/rind_YYYY-MM-DD_HH.log
+```
+
 ## Future Enhancements
 
 Planned metrics improvements (see `.kiro/specs/metrics-and-logging/tasks.md`):
-- Structured logging with tracing
 - Docker Compose monitoring stack
 - Pre-configured Grafana dashboards
 - Alerting configuration

@@ -291,8 +291,9 @@ curl -s http://127.0.0.1:9090/metrics | grep -E "(dns_nxdomain_total|dns_servfai
 # DNS records count
 docker exec rind-server wc -l dns_records.txt
 
-# Log analysis
-docker logs rind-server | grep -E "(INFO|ERROR|WARN)" | tail -20
+# Structured log analysis
+docker exec rind-server ls logs/                    # List log files
+docker exec rind-server tail -20 logs/rind_YYYY-MM-DD_HH.log  # Recent structured logs
 
 # Connection testing
 docker exec rind-server netstat -tulpn 2>/dev/null || echo "netstat not available"
@@ -338,6 +339,47 @@ fi
 echo
 echo "Recent Logs (last 5 lines):"
 docker logs rind-server --tail 5
+```
+
+### Structured Logging Analysis
+
+The server writes comprehensive structured logs to files inside the container:
+
+```bash
+# List available log files
+docker exec rind-server ls logs/
+
+# View recent structured logs
+docker exec rind-server tail -50 logs/rind_YYYY-MM-DD_HH.log
+
+# Search for specific query types
+docker exec rind-server grep 'query_type="A"' logs/rind_YYYY-MM-DD_HH.log
+
+# Find error logs with context
+docker exec rind-server grep 'ERROR' logs/rind_YYYY-MM-DD_HH.log
+
+# Monitor logs in real-time (if container is running)
+docker exec rind-server tail -f logs/rind_YYYY-MM-DD_HH.log
+
+# Extract performance metrics from logs
+docker exec rind-server grep 'processing_time_ms' logs/rind_YYYY-MM-DD_HH.log | tail -10
+```
+
+**Example Structured Log Entries:**
+
+Successful DNS Query:
+```
+2025-07-24T12:48:22.291594Z  INFO ThreadId(07) rind::server: DNS query processed successfully 
+client_addr=192.168.65.1:17426 query_id=46562 query_type="A" query_name=example.com 
+response_code=0 response_code_str="NOERROR" processing_time_ms=1.2 response_size=65 
+instance_id=dns-server-1
+```
+
+Error with Debug Context:
+```
+2025-07-24T12:49:57.979727Z ERROR ThreadId(07) rind::server: Failed to parse DNS packet 
+client_addr=192.168.65.1:24587 packet_size=2 error="Packet too short: 2 bytes" 
+processing_time_ms=3.0 instance_id=dns-server-1 packet_hex=1234
 ```
 
 ## 🚨 Troubleshooting
