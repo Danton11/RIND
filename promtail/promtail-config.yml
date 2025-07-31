@@ -1,0 +1,87 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # DNS server logs from shared volume
+  - job_name: dns-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: dns-server-logs
+          __path__: /var/log/dns/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            instance_id: fields.instance_id
+            client_ip: fields.client_ip
+            query_type: fields.query_type
+            query_name: fields.query_name
+            response_code: fields.response_code
+            processing_time_ms: fields.processing_time_ms
+      - labels:
+          level:
+          instance_id:
+          query_type:
+          response_code:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+  # Docker container logs for DNS servers
+  - job_name: docker-dns-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.service=dns-server"]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        target_label: 'container_name'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+      - source_labels: ['__meta_docker_container_label_server_id']
+        target_label: 'server_id'
+      - source_labels: ['__meta_docker_container_id']
+        target_label: 'container_id'
+        regex: '(.{12})'
+        replacement: '${1}'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            fields: fields
+      - json:
+          source: fields
+          expressions:
+            instance_id: instance_id
+            client_ip: client_ip
+            query_type: query_type
+            query_name: query_name
+            response_code: response_code
+            processing_time_ms: processing_time_ms
+      - labels:
+          level:
+          instance_id:
+          query_type:
+          response_code:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+      - output:
+          source: message

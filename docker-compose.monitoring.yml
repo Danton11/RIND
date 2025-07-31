@@ -1,0 +1,143 @@
+services:
+  # DNS Server instances for monitoring
+  dns-server-1:
+    build: .
+    container_name: dns-server-1
+    ports:
+      - "12312:12312/udp"  # DNS port
+      - "8080:8080"        # API port
+      - "9092:9090"        # Metrics port
+    environment:
+      - DNS_BIND_ADDR=0.0.0.0:12312
+      - API_BIND_ADDR=0.0.0.0:8080
+      - METRICS_PORT=9090
+      - SERVER_ID=dns-server-1
+      - INSTANCE_ID=dns-server-1
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+      - RUST_LOG=info
+      - DISABLE_FILE_LOGGING=true
+    volumes:
+      - ./dns_records.txt:/app/dns_records.txt
+    networks:
+      - monitoring-network
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9090"
+      - "prometheus.io/path=/metrics"
+      - "com.docker.compose.service=dns-server"
+
+  dns-server-2:
+    build: .
+    container_name: dns-server-2
+    ports:
+      - "12313:12312/udp"  # DNS port
+      - "8081:8080"        # API port
+      - "9093:9090"        # Metrics port
+    environment:
+      - DNS_BIND_ADDR=0.0.0.0:12312
+      - API_BIND_ADDR=0.0.0.0:8080
+      - METRICS_PORT=9090
+      - SERVER_ID=dns-server-2
+      - INSTANCE_ID=dns-server-2
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+      - RUST_LOG=info
+      - DISABLE_FILE_LOGGING=true
+    volumes:
+      - ./dns_records.txt:/app/dns_records.txt
+    networks:
+      - monitoring-network
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9090"
+      - "prometheus.io/path=/metrics"
+      - "com.docker.compose.service=dns-server"
+
+  # Prometheus - Metrics collection and storage
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitoring-network
+    depends_on:
+      - dns-server-1
+      - dns-server-2
+    restart: unless-stopped
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - monitoring-network
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - monitoring-network
+    restart: unless-stopped
+
+  # Promtail - Log collection agent
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitoring-network
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+networks:
+  monitoring-network:
+    driver: bridge
+    name: monitoring-network
+
+volumes:
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  loki-data:
+    driver: local

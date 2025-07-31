@@ -1,0 +1,61 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'dns-server-monitor'
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # DNS servers with Docker service discovery
+  - job_name: 'dns-servers'
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        port: 9090
+        filters:
+          - name: label
+            values: ["com.docker.compose.service=dns-server"]
+    relabel_configs:
+      # Use container name as instance label
+      - source_labels: [__meta_docker_container_name]
+        target_label: instance
+      # Use service label for job identification
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      # Add server ID from environment variable
+      - source_labels: [__meta_docker_container_label_server_id]
+        target_label: server_id
+      # Keep only containers with prometheus scrape label
+      - source_labels: [__meta_docker_container_label_prometheus_io_scrape]
+        action: keep
+        regex: true
+      # Use custom metrics path if specified
+      - source_labels: [__meta_docker_container_label_prometheus_io_path]
+        target_label: __metrics_path__
+        regex: (.+)
+      # Use custom port if specified
+      - source_labels: [__address__, __meta_docker_container_label_prometheus_io_port]
+        target_label: __address__
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+
+  # Static configuration fallback for DNS servers
+  - job_name: 'dns-servers-static'
+    static_configs:
+      - targets: 
+          - 'dns-server-1:9090'
+          - 'dns-server-2:9090'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+        replacement: '${1}'
