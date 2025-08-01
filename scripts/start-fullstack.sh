@@ -248,6 +248,7 @@ show_status() {
         "prometheus:9090:-/healthy"
         "grafana:3000:api/health"
         "loki:3100:ready"
+        "system-metrics:8091:health"
     )
     
     for service_info in "${services[@]}"; do
@@ -369,6 +370,7 @@ show_urls() {
     echo -e "  ${BLUE}Prometheus Metrics:${NC}   http://localhost:9090"
     echo -e "  ${BLUE}AlertManager:${NC}         http://localhost:9093"
     echo -e "  ${BLUE}HAProxy Stats:${NC}        http://localhost:8404/stats"
+    echo -e "  ${BLUE}System Metrics:${NC}       http://localhost:8091/metrics"
     echo -e "  ${BLUE}DNS API (Load Balanced):${NC} http://localhost:80"
     echo -e "  ${BLUE}DNS Server:${NC}           udp://localhost:53"
     echo -e "  ${BLUE}Primary DNS API:${NC}      http://localhost:8080"

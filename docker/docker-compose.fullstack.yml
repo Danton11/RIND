@@ -25,7 +25,7 @@ services:
       - LOG_FORMAT=json
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt:ro
+      - ../dns_records.txt:/app/dns_records.txt
       - dns_data_primary:/app/data
     networks:
       - rind-network
@@ -71,7 +71,7 @@ services:
       - LOG_FORMAT=json
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt:ro
+      - ../dns_records.txt:/app/dns_records.txt
       - dns_data_secondary:/app/data
     networks:
       - rind-network
@@ -269,6 +269,141 @@ services:
         limits:
           memory: 128M
           cpus: '0.25'
+
+  # ============================================================================
+  # SYSTEM METRICS - Node Exporter for infrastructure monitoring
+  # ============================================================================
+  
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: rind-node-exporter
+    ports:
+      - "9100:9100/tcp"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.cpu'
+      - '--collector.meminfo'
+      - '--collector.diskstats'
+      - '--collector.filesystem'
+      - '--collector.netdev'
+      - '--collector.loadavg'
+      - '--collector.systemd'
+      - '--collector.processes'
+      - '--web.listen-address=:9100'
+      - '--log.level=info'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
+    networks:
+      - rind-network
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9100"
+      - "prometheus.io/path=/metrics"
+      - "com.rind.service=monitoring"
+      - "com.rind.component=system-metrics"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.1'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+    pid: host
+    privileged: true
+
+  # Container-specific metrics exporter
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    container_name: rind-cadvisor
+    ports:
+      - "8082:8080/tcp"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - rind-network
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=8080"
+      - "prometheus.io/path=/metrics"
+      - "com.rind.service=monitoring"
+      - "com.rind.component=container-metrics"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    privileged: true
+    devices:
+      - /dev/kmsg
+
+  # RIND-specific system metrics exporter
+  system-metrics-exporter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.system-metrics
+    container_name: rind-system-metrics
+    ports:
+      - "8091:8091/tcp"
+    environment:
+      - METRICS_PORT=8091
+      - METRICS_HOST=0.0.0.0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../dns_records.txt:/app/dns_records.txt:ro
+    networks:
+      - rind-network
+    depends_on:
+      - dns-server-primary
+      - dns-server-secondary
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=8091"
+      - "prometheus.io/path=/metrics"
+      - "com.rind.service=monitoring"
+      - "com.rind.component=rind-system-metrics"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
 
   # ============================================================================
   # ALERTING - AlertManager for notifications

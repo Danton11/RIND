@@ -58,3 +58,57 @@ scrape_configs:
         regex: '([^:]+):.*'
         target_label: instance
         replacement: '${1}'
+
+  # DNS Canary with continuous metrics
+  - job_name: 'dns-canary'
+    static_configs:
+      - targets: ['host.docker.internal:8090']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'dns-canary'
+
+  # System metrics from Node Exporter
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'system-metrics'
+      - target_label: instance
+        replacement: 'rind-host'
+
+  # Container metrics from cAdvisor
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'container-metrics'
+
+  # HAProxy load balancer metrics
+  - job_name: 'haproxy'
+    static_configs:
+      - targets: ['load-balancer:8404']
+    scrape_interval: 15s
+    metrics_path: /stats/prometheus
+    relabel_configs:
+      - target_label: service
+        replacement: 'load-balancer'
+
+  # RIND System Metrics Exporter
+  - job_name: 'rind-system-metrics'
+    static_configs:
+      - targets: ['system-metrics-exporter:8091']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'rind-system-metrics'
+      - target_label: instance
+        replacement: 'rind-system'

@@ -1,0 +1,52 @@
+# RIND System Metrics Exporter Dockerfile
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    procps \
+    wget \
+    curl \
+    gcc \
+    python3-dev \
+    build-essential \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    psutil==5.9.6 \
+    requests==2.31.0
+
+# Create app directory
+WORKDIR /app
+
+# Copy the system metrics exporter script
+COPY scripts/system-metrics-exporter.py /app/system-metrics-exporter.py
+
+# Make script executable
+RUN chmod +x /app/system-metrics-exporter.py
+
+# Create non-root user for security and add to docker group
+RUN groupadd -r rind && useradd -r -g rind rind
+RUN groupadd -f docker && usermod -aG docker rind
+RUN chown -R rind:rind /app
+USER rind
+
+# Expose metrics port
+EXPOSE 8091
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8091/health || exit 1
+
+# Run the metrics exporter
+CMD ["python3", "/app/system-metrics-exporter.py"]
