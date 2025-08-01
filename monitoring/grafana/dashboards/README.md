@@ -1,10 +1,16 @@
-# RIND DNS Record Management Dashboard
+# RIND DNS Server Dashboards
 
-This directory contains Grafana dashboard configurations for monitoring the RIND DNS server's record management capabilities.
+This directory contains Grafana dashboard configurations for monitoring the RIND DNS server.
 
-## Dashboard: dns-record-management.json
+## Available Dashboards
 
-The **RIND DNS Record Management** dashboard provides comprehensive monitoring of DNS record operations and API performance.
+- **dns-overview.json** - Main DNS server metrics and performance monitoring
+- **dns-canary-dashboard.json** - External monitoring and health checks
+- **rind-system-metrics.json** - System-level infrastructure metrics
+- **dns-record-management.json** - DNS record operations and API performance
+- **dns-protocol.json** - Protocol-level statistics and analysis
+- **dns-infrastructure-dashboard.json** - Infrastructure monitoring and capacity
+- **dns-errors.json** - Error tracking and troubleshooting
 
 ### Dashboard Panels
 

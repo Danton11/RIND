@@ -1,475 +1,338 @@
 #!/usr/bin/env python3
 """
-DNS Canary Script - Generates realistic DNS traffic and API operations for testing and monitoring
-
-This script performs:
-- DNS queries to the RIND DNS server with random domains and query types
-- API operations (CREATE, READ, UPDATE, DELETE) on the REST API
-- Datastore priming with initial test records
-- Periodic API health checks and operations
+RIND DNS Canary Monitoring Script
+Continuously monitors DNS server health and exposes metrics
 """
 
-import random
 import time
-import subprocess
-import sys
-import signal
-import logging
+import socket
 import requests
+import threading
+import argparse
+import logging
 import json
-import uuid
-from typing import List, Tuple, Dict, Optional
-from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
+import signal
+import sys
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('dns-canary.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+class DNSCanaryMetrics:
+    """Collects and stores DNS canary metrics"""
+    
+    def __init__(self):
+        self.start_time = time.time()
+        self.dns_queries_total = 0
+        self.dns_queries_success = 0
+        self.dns_queries_failed = 0
+        self.dns_response_time_sum = 0.0
+        self.dns_last_response_time = 0.0
+        self.api_requests_total = 0
+        self.api_requests_success = 0
+        self.api_requests_failed = 0
+        self.api_response_time_sum = 0.0
+        self.api_last_response_time = 0.0
+        self.dns_server_up = 0
+        self.api_server_up = 0
+        self.lock = threading.Lock()
+    
+    def record_dns_query(self, success, response_time):
+        with self.lock:
+            self.dns_queries_total += 1
+            if success:
+                self.dns_queries_success += 1
+                self.dns_server_up = 1
+            else:
+                self.dns_queries_failed += 1
+                self.dns_server_up = 0
+            self.dns_response_time_sum += response_time
+            self.dns_last_response_time = response_time
+    
+    def record_api_request(self, success, response_time):
+        with self.lock:
+            self.api_requests_total += 1
+            if success:
+                self.api_requests_success += 1
+                self.api_server_up = 1
+            else:
+                self.api_requests_failed += 1
+                self.api_server_up = 0
+            self.api_response_time_sum += response_time
+            self.api_last_response_time = response_time
+    
+    def get_metrics(self):
+        with self.lock:
+            uptime = time.time() - self.start_time
+            dns_avg_response_time = (self.dns_response_time_sum / self.dns_queries_total) if self.dns_queries_total > 0 else 0
+            api_avg_response_time = (self.api_response_time_sum / self.api_requests_total) if self.api_requests_total > 0 else 0
+            dns_success_rate = (self.dns_queries_success / self.dns_queries_total * 100) if self.dns_queries_total > 0 else 0
+            api_success_rate = (self.api_requests_success / self.api_requests_total * 100) if self.api_requests_total > 0 else 0
+            
+            return {
+                'canary_uptime_seconds': uptime,
+                'canary_dns_queries_total': self.dns_queries_total,
+                'canary_dns_queries_success_total': self.dns_queries_success,
+                'canary_dns_queries_failed_total': self.dns_queries_failed,
+                'canary_dns_response_time_seconds': self.dns_last_response_time,
+                'canary_dns_response_time_avg_seconds': dns_avg_response_time,
+                'canary_dns_success_rate_percent': dns_success_rate,
+                'canary_dns_server_up': self.dns_server_up,
+                'canary_api_requests_total': self.api_requests_total,
+                'canary_api_requests_success_total': self.api_requests_success,
+                'canary_api_requests_failed_total': self.api_requests_failed,
+                'canary_api_response_time_seconds': self.api_last_response_time,
+                'canary_api_response_time_avg_seconds': api_avg_response_time,
+                'canary_api_success_rate_percent': api_success_rate,
+                'canary_api_server_up': self.api_server_up
+            }
+
+class MetricsHandler(BaseHTTPRequestHandler):
+    """HTTP handler for metrics endpoint"""
+    
+    def __init__(self, *args, metrics=None, **kwargs):
+        self.metrics = metrics
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        
+        if parsed_path.path == '/metrics':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            
+            metrics_data = self.metrics.get_metrics()
+            output = []
+            output.append('# HELP canary_metrics DNS Canary monitoring metrics')
+            output.append('# TYPE canary_metrics gauge')
+            
+            for metric_name, value in metrics_data.items():
+                output.append(f'{metric_name} {value}')
+            
+            self.wfile.write('\n'.join(output).encode('utf-8'))
+            self.wfile.write(b'\n')
+            
+        elif parsed_path.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            health_data = {
+                'status': 'healthy',
+                'timestamp': time.time(),
+                'uptime': time.time() - self.metrics.start_time
+            }
+            self.wfile.write(json.dumps(health_data).encode('utf-8'))
+            
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'Not Found')
+    
+    def do_HEAD(self):
+        parsed_path = urlparse(self.path)
+        
+        if parsed_path.path in ['/health', '/metrics']:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain' if parsed_path.path == '/metrics' else 'application/json')
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Suppress default HTTP logging
+        pass
+
 class DNSCanary:
-    def __init__(self, dns_server="localhost", dns_port=12312, api_server="localhost", api_port=8080):
+    """Main DNS canary monitoring class"""
+    
+    def __init__(self, dns_server, dns_port, api_server, api_port, metrics_port):
         self.dns_server = dns_server
         self.dns_port = dns_port
         self.api_server = api_server
         self.api_port = api_port
-        self.api_base_url = f"http://{api_server}:{api_port}"
+        self.metrics_port = metrics_port
+        self.metrics = DNSCanaryMetrics()
         self.running = True
-        self.created_record_ids = []  # Track records we create for cleanup
+        self.test_domains = ['example.com', 'google.com', 'cloudflare.com']
         
-        # Domains that should exist in the DNS server (based on actual dns_records.txt)
-        self.existing_domains = [
-            "test.example.com",
-            "canary-test-1.example.com",
-            "canary-test-2.example.com", 
-            "canary-test-3.example.com",
-            "www.canary-test.example.com",
-            "mail.canary-test.example.com",
-            "api.canary-test.example.com",
-            "db.canary-test.example.com",
-            "test-canary.example.com",
-            "minimal.example.com",
-            "minimal2.example.com"
-        ]
-        
-        # Random domains that likely don't exist
-        self.nonexistent_domains = [
-            "nonexistent-domain-12345.com",
-            "fake-website-xyz.net",
-            "does-not-exist-abc.org",
-            "random-gibberish-domain.info",
-            "test-nxdomain-response.example",
-            "missing-record.test",
-            "invalid-hostname-999.local"
-        ]
-        
-        # DNS query types to test
-        self.query_types = ["A", "AAAA", "MX", "CNAME", "TXT", "NS"]
-        
-        # Query patterns with expected responses
-        self.query_patterns = [
-            # Existing domains - should return NOERROR
-            {"domains": self.existing_domains, "weight": 60, "expected": "NOERROR"},
-            # Non-existent domains - should return NXDOMAIN  
-            {"domains": self.nonexistent_domains, "weight": 30, "expected": "NXDOMAIN"},
-            # Edge cases that might cause SERVFAIL
-            {"domains": ["", ".", "invalid..domain", "toolong" + "x" * 250 + ".com"], "weight": 10, "expected": "SERVFAIL"}
-        ]
-        
-        # Statistics tracking
-        self.stats = {
-            "total_queries": 0,
-            "noerror_responses": 0,
-            "nxdomain_responses": 0,
-            "servfail_responses": 0,
-            "timeout_responses": 0,
-            "other_responses": 0,
-            "api_operations": 0,
-            "api_successes": 0,
-            "api_failures": 0,
-            "records_created": 0,
-            "records_updated": 0,
-            "records_deleted": 0
-        }
-        
-        # Sample data for priming the datastore
-        self.sample_records = [
-            {"name": "canary-test-1.example.com", "ip": "192.168.1.10", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "canary-test-2.example.com", "ip": "192.168.1.11", "ttl": 600, "record_type": "A", "class": "IN"},
-            {"name": "canary-test-3.example.com", "ip": "10.0.0.10", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "www.canary-test.example.com", "record_type": "CNAME", "class": "IN", "value": "canary-test-1.example.com", "ttl": 300},
-            {"name": "mail.canary-test.example.com", "ip": "192.168.1.20", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "canary-test.example.com", "record_type": "TXT", "class": "IN", "value": "v=spf1 include:_spf.google.com ~all", "ttl": 300},
-            {"name": "api.canary-test.example.com", "ip": "10.0.0.20", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "db.canary-test.example.com", "ip": "10.0.0.30", "ttl": 300, "record_type": "A", "class": "IN"},
-        ]
-
-    def signal_handler(self, signum, frame):
-        """Handle graceful shutdown on SIGINT/SIGTERM"""
-        logger.info("Received shutdown signal, stopping canary...")
-        self.running = False
-
-    def api_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Optional[Dict]:
-        """Make an API request to the RIND server"""
+    def test_dns_query(self, domain):
+        """Test a DNS query"""
         try:
-            url = f"{self.api_base_url}{endpoint}"
-            headers = {"Content-Type": "application/json"}
+            start_time = time.time()
             
-            if method == "GET":
-                response = requests.get(url, timeout=5)
-            elif method == "POST":
-                response = requests.post(url, json=data, headers=headers, timeout=5)
-            elif method == "PUT":
-                response = requests.put(url, json=data, headers=headers, timeout=5)
-            elif method == "DELETE":
-                response = requests.delete(url, timeout=5)
+            # Create UDP socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(5.0)
+            
+            # Simple DNS query packet for A record
+            query_id = 0x1234
+            query = bytearray()
+            query.extend(query_id.to_bytes(2, 'big'))  # ID
+            query.extend(b'\x01\x00')  # Flags: standard query
+            query.extend(b'\x00\x01')  # Questions: 1
+            query.extend(b'\x00\x00')  # Answer RRs: 0
+            query.extend(b'\x00\x00')  # Authority RRs: 0
+            query.extend(b'\x00\x00')  # Additional RRs: 0
+            
+            # Encode domain name
+            for part in domain.split('.'):
+                query.append(len(part))
+                query.extend(part.encode())
+            query.append(0)  # End of name
+            
+            query.extend(b'\x00\x01')  # Type: A
+            query.extend(b'\x00\x01')  # Class: IN
+            
+            # Send query
+            sock.sendto(query, (self.dns_server, self.dns_port))
+            
+            # Receive response
+            response, addr = sock.recvfrom(512)
+            sock.close()
+            
+            response_time = time.time() - start_time
+            
+            # Basic validation - check if we got a response
+            if len(response) >= 12:
+                return True, response_time
             else:
-                logger.error(f"Unsupported HTTP method: {method}")
-                return None
-            
-            self.stats["api_operations"] += 1
-            
-            if response.status_code in [200, 201, 204]:
-                self.stats["api_successes"] += 1
-                if response.status_code != 204:  # No content for DELETE
-                    return response.json()
-                return {"success": True}
-            else:
-                self.stats["api_failures"] += 1
-                logger.warning(f"API request failed: {method} {endpoint} -> {response.status_code}")
-                return None
+                return False, response_time
                 
-        except requests.exceptions.RequestException as e:
-            self.stats["api_failures"] += 1
-            logger.error(f"API request error: {e}")
-            return None
-
-    def prime_datastore(self):
-        """Prime the datastore with sample records"""
-        logger.info("Priming datastore with sample records...")
-        
-        for record_data in self.sample_records:
-            result = self.api_request("POST", "/records", record_data)
-            if result and result.get("success"):
-                record_id = result["data"]["id"]
-                self.created_record_ids.append(record_id)
-                self.stats["records_created"] += 1
-                logger.info(f"Created sample record: {record_data['name']} (ID: {record_id})")
-            else:
-                logger.warning(f"Failed to create sample record: {record_data['name']}")
-        
-        logger.info(f"Datastore priming complete. Created {len(self.created_record_ids)} records.")
-
-    def perform_api_operations(self):
-        """Perform random API operations"""
-        operations = ["create", "read", "update", "delete", "list"]
-        operation = random.choice(operations)
-        
-        try:
-            if operation == "create":
-                self.create_random_record()
-            elif operation == "read":
-                self.read_random_record()
-            elif operation == "update":
-                self.update_random_record()
-            elif operation == "delete":
-                self.delete_random_record()
-            elif operation == "list":
-                self.list_records()
         except Exception as e:
-            logger.error(f"Error performing API operation {operation}: {e}")
-
-    def create_random_record(self):
-        """Create a random DNS record via API"""
-        domains = [
-            f"dynamic-{random.randint(1000, 9999)}.example.com",
-            f"test-{uuid.uuid4().hex[:8]}.canary.local",
-            f"api-test-{random.randint(100, 999)}.test.org"
-        ]
-        
-        record_types = ["A", "CNAME", "TXT"]
-        record_type = random.choice(record_types)
-        
-        record_data = {
-            "name": random.choice(domains),
-            "ttl": random.choice([300, 600, 900, 1800]),
-            "record_type": record_type,
-            "class": "IN"
-        }
-        
-        if record_type == "A":
-            record_data["ip"] = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-        elif record_type == "CNAME":
-            record_data["value"] = "target.example.com"
-        elif record_type == "TXT":
-            record_data["value"] = f"test-value-{random.randint(1, 1000)}"
-        
-        result = self.api_request("POST", "/records", record_data)
-        if result and result.get("success"):
-            record_id = result["data"]["id"]
-            self.created_record_ids.append(record_id)
-            self.stats["records_created"] += 1
-            logger.debug(f"Created record: {record_data['name']} (ID: {record_id})")
-
-    def read_random_record(self):
-        """Read a random record via API"""
-        if not self.created_record_ids:
-            return
-        
-        record_id = random.choice(self.created_record_ids)
-        result = self.api_request("GET", f"/records/{record_id}")
-        if result and result.get("success"):
-            logger.debug(f"Read record: {result['data']['name']} (ID: {record_id})")
-
-    def update_random_record(self):
-        """Update a random record via API"""
-        if not self.created_record_ids:
-            return
-        
-        record_id = random.choice(self.created_record_ids)
-        
-        # Random update data
-        update_data = {}
-        if random.choice([True, False]):
-            update_data["ttl"] = random.choice([300, 600, 900, 1800])
-        if random.choice([True, False]):
-            update_data["ip"] = f"10.0.{random.randint(1, 254)}.{random.randint(1, 254)}"
-        
-        if update_data:
-            result = self.api_request("PUT", f"/records/{record_id}", update_data)
-            if result and result.get("success"):
-                self.stats["records_updated"] += 1
-                logger.debug(f"Updated record: {record_id}")
-
-    def delete_random_record(self):
-        """Delete a random record via API"""
-        if len(self.created_record_ids) <= len(self.sample_records):
-            # Keep at least the sample records
-            return
-        
-        record_id = random.choice(self.created_record_ids)
-        result = self.api_request("DELETE", f"/records/{record_id}")
-        if result:
-            self.created_record_ids.remove(record_id)
-            self.stats["records_deleted"] += 1
-            logger.debug(f"Deleted record: {record_id}")
-
-    def list_records(self):
-        """List records via API with pagination"""
-        page = random.randint(1, 3)
-        per_page = random.choice([10, 25, 50])
-        
-        result = self.api_request("GET", f"/records?page={page}&per_page={per_page}")
-        if result and result.get("success"):
-            total = result["data"]["total"]
-            count = len(result["data"]["records"])
-            logger.debug(f"Listed records: page {page}, {count} records, {total} total")
-
-    def select_query(self) -> Tuple[str, str]:
-        """Select a random domain and query type based on weighted patterns"""
-        # Choose pattern based on weights
-        total_weight = sum(p["weight"] for p in self.query_patterns)
-        rand = random.randint(1, total_weight)
-        
-        cumulative = 0
-        selected_pattern = None
-        for pattern in self.query_patterns:
-            cumulative += pattern["weight"]
-            if rand <= cumulative:
-                selected_pattern = pattern
-                break
-        
-        # Select random domain from the chosen pattern
-        domain = random.choice(selected_pattern["domains"])
-        query_type = random.choice(self.query_types)
-        
-        return domain, query_type
-
-    def send_dns_query(self, domain: str, query_type: str) -> str:
-        """Send DNS query using dig and return the response code"""
+            response_time = time.time() - start_time
+            logger.debug(f"DNS query failed for {domain}: {e}")
+            return False, response_time
+    
+    def test_api_request(self):
+        """Test an API request"""
         try:
-            cmd = [
-                "dig", 
-                f"@{self.dns_server}", 
-                "-p", str(self.dns_port),
-                "+short",
-                "+time=2",  # 2 second timeout
-                "+tries=1", # Only try once
-                domain, 
-                query_type
-            ]
+            start_time = time.time()
+            url = f"http://{self.api_server}:{self.api_port}/records"
             
-            # Run dig command
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=5
-            )
+            response = requests.get(url, timeout=5)
+            response_time = time.time() - start_time
             
-            # Parse response code from dig output
-            if result.returncode == 0:
-                return "NOERROR"
-            elif result.returncode == 9:  # NXDOMAIN
-                return "NXDOMAIN"
-            elif result.returncode == 2:   # SERVFAIL
-                return "SERVFAIL"
+            if response.status_code == 200:
+                return True, response_time
             else:
-                return "OTHER"
+                return False, response_time
                 
-        except subprocess.TimeoutExpired:
-            return "TIMEOUT"
         except Exception as e:
-            logger.error(f"Error sending DNS query: {e}")
-            return "ERROR"
-
-    def update_stats(self, response_code: str):
-        """Update statistics based on response code"""
-        self.stats["total_queries"] += 1
-        
-        if response_code == "NOERROR":
-            self.stats["noerror_responses"] += 1
-        elif response_code == "NXDOMAIN":
-            self.stats["nxdomain_responses"] += 1
-        elif response_code == "SERVFAIL":
-            self.stats["servfail_responses"] += 1
-        elif response_code == "TIMEOUT":
-            self.stats["timeout_responses"] += 1
-        else:
-            self.stats["other_responses"] += 1
-
-    def log_stats(self):
-        """Log current statistics"""
-        dns_total = self.stats["total_queries"]
-        api_total = self.stats["api_operations"]
-        
-        if dns_total == 0 and api_total == 0:
-            return
-        
-        # DNS Statistics
-        if dns_total > 0:
-            logger.info(f"DNS Stats - Total: {dns_total}, "
-                       f"NOERROR: {self.stats['noerror_responses']} ({self.stats['noerror_responses']/dns_total*100:.1f}%), "
-                       f"NXDOMAIN: {self.stats['nxdomain_responses']} ({self.stats['nxdomain_responses']/dns_total*100:.1f}%), "
-                       f"SERVFAIL: {self.stats['servfail_responses']} ({self.stats['servfail_responses']/dns_total*100:.1f}%), "
-                       f"TIMEOUT: {self.stats['timeout_responses']} ({self.stats['timeout_responses']/dns_total*100:.1f}%)")
-        
-        # API Statistics
-        if api_total > 0:
-            success_rate = self.stats['api_successes'] / api_total * 100 if api_total > 0 else 0
-            logger.info(f"API Stats - Total: {api_total}, "
-                       f"Success: {self.stats['api_successes']} ({success_rate:.1f}%), "
-                       f"Failures: {self.stats['api_failures']}, "
-                       f"Created: {self.stats['records_created']}, "
-                       f"Updated: {self.stats['records_updated']}, "
-                       f"Deleted: {self.stats['records_deleted']}, "
-                       f"Active Records: {len(self.created_record_ids)}")
-
-    def run(self, prime_datastore=True, enable_api_ops=True, cleanup_on_exit=True):
-        """Main canary loop"""
-        logger.info(f"Starting DNS Canary - DNS: {self.dns_server}:{self.dns_port}, API: {self.api_server}:{self.api_port}")
-        
-        # Set up signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        
-        # Prime datastore with sample records
-        if prime_datastore:
-            self.prime_datastore()
-        
-        last_stats_log = time.time()
-        last_api_operation = time.time()
-        operation_counter = 0
+            response_time = time.time() - start_time
+            logger.debug(f"API request failed: {e}")
+            return False, response_time
+    
+    def monitoring_loop(self):
+        """Main monitoring loop"""
+        logger.info("Starting DNS canary monitoring loop")
         
         while self.running:
             try:
-                # Decide whether to perform DNS query or API operation
-                # 95% DNS queries, 5% API operations (much more DNS focused)
-                if enable_api_ops and random.random() < 0.05:
-                    # Perform API operation
-                    self.perform_api_operations()
-                    time.sleep(random.uniform(0.1, 0.3))  # Much shorter sleep after API ops
+                # Test DNS queries
+                for domain in self.test_domains:
+                    success, response_time = self.test_dns_query(domain)
+                    self.metrics.record_dns_query(success, response_time)
+                    
+                    if success:
+                        logger.debug(f"DNS query for {domain}: {response_time:.3f}s")
+                    else:
+                        logger.warning(f"DNS query failed for {domain}: {response_time:.3f}s")
+                
+                # Test API request
+                success, response_time = self.test_api_request()
+                self.metrics.record_api_request(success, response_time)
+                
+                if success:
+                    logger.debug(f"API request: {response_time:.3f}s")
                 else:
-                    # Perform DNS query
-                    domain, query_type = self.select_query()
-                    
-                    start_time = time.time()
-                    response_code = self.send_dns_query(domain, query_type)
-                    duration = time.time() - start_time
-                    
-                    self.update_stats(response_code)
-                    logger.debug(f"Query: {domain} {query_type} -> {response_code} ({duration:.3f}s)")
-                    
-                    # Very short sleep between DNS queries for high load
-                    time.sleep(random.uniform(0.001, 0.005))
+                    logger.warning(f"API request failed: {response_time:.3f}s")
                 
-                operation_counter += 1
+                # Wait before next test cycle
+                time.sleep(10)
                 
-                # Periodic API operations every 60-120 seconds (less frequent)
-                if enable_api_ops and time.time() - last_api_operation > random.uniform(60, 120):
-                    self.perform_api_operations()
-                    last_api_operation = time.time()
-                
-                # Log stats every 60 seconds
-                if time.time() - last_stats_log > 60:
-                    self.log_stats()
-                    last_stats_log = time.time()
-                
-            except KeyboardInterrupt:
-                break
             except Exception as e:
-                logger.error(f"Unexpected error in canary loop: {e}")
-                time.sleep(1)
+                logger.error(f"Error in monitoring loop: {e}")
+                time.sleep(5)
+    
+    def start_metrics_server(self):
+        """Start the metrics HTTP server"""
+        def create_handler(*args, **kwargs):
+            return MetricsHandler(*args, metrics=self.metrics, **kwargs)
         
-        # Cleanup: optionally delete created records
-        if cleanup_on_exit:
-            logger.info("Cleaning up created records...")
-            cleanup_count = 0
-            for record_id in self.created_record_ids[:]:  # Copy list to avoid modification during iteration
-                if self.api_request("DELETE", f"/records/{record_id}"):
-                    cleanup_count += 1
-            
-            logger.info(f"DNS Canary stopped. Cleaned up {cleanup_count} records.")
-        else:
-            logger.info(f"DNS Canary stopped. Preserving {len(self.created_record_ids)} created records (cleanup disabled).")
+        server = HTTPServer(('0.0.0.0', self.metrics_port), create_handler)
+        logger.info(f"Metrics server starting on port {self.metrics_port}")
         
-        self.log_stats()
+        def serve_forever():
+            try:
+                server.serve_forever()
+            except Exception as e:
+                logger.error(f"Metrics server error: {e}")
+        
+        metrics_thread = threading.Thread(target=serve_forever, daemon=True)
+        metrics_thread.start()
+        
+        return server
+    
+    def start(self):
+        """Start the canary monitoring"""
+        logger.info(f"Starting DNS canary monitoring")
+        logger.info(f"DNS Server: {self.dns_server}:{self.dns_port}")
+        logger.info(f"API Server: {self.api_server}:{self.api_port}")
+        logger.info(f"Metrics Port: {self.metrics_port}")
+        
+        # Start metrics server
+        metrics_server = self.start_metrics_server()
+        
+        # Setup signal handlers
+        def signal_handler(signum, frame):
+            logger.info("Received shutdown signal")
+            self.running = False
+            metrics_server.shutdown()
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Start monitoring loop
+        try:
+            self.monitoring_loop()
+        except KeyboardInterrupt:
+            logger.info("Shutting down canary monitoring")
+            self.running = False
+            metrics_server.shutdown()
 
 def main():
-    """Main entry point"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="DNS Canary - Generate realistic DNS traffic and API operations")
-    parser.add_argument("--dns-server", default="localhost", help="DNS server address (default: localhost)")
-    parser.add_argument("--dns-port", type=int, default=12312, help="DNS server port (default: 12312)")
-    parser.add_argument("--api-server", default="localhost", help="API server address (default: localhost)")
-    parser.add_argument("--api-port", type=int, default=8080, help="API server port (default: 8080)")
-    parser.add_argument("--no-prime", action="store_true", help="Skip datastore priming")
-    parser.add_argument("--no-api", action="store_true", help="Disable API operations")
-    parser.add_argument("--no-cleanup", action="store_true", help="Preserve created records on exit")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser = argparse.ArgumentParser(description='RIND DNS Canary Monitoring')
+    parser.add_argument('--dns-server', default='localhost', help='DNS server hostname')
+    parser.add_argument('--dns-port', type=int, default=12312, help='DNS server port')
+    parser.add_argument('--api-server', default='localhost', help='API server hostname')
+    parser.add_argument('--api-port', type=int, default=8080, help='API server port')
+    parser.add_argument('--metrics-port', type=int, default=8090, help='Metrics server port')
+    parser.add_argument('--log-level', default='INFO', help='Log level')
     
     args = parser.parse_args()
     
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # Set log level
+    logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
     
+    # Create and start canary
     canary = DNSCanary(
-        dns_server=args.dns_server, 
-        dns_port=args.dns_port,
-        api_server=args.api_server,
-        api_port=args.api_port
+        args.dns_server,
+        args.dns_port,
+        args.api_server,
+        args.api_port,
+        args.metrics_port
     )
-    canary.run(
-        prime_datastore=not args.no_prime,
-        enable_api_ops=not args.no_api,
-        cleanup_on_exit=not args.no_cleanup
-    )
+    
+    canary.start()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -50,15 +50,17 @@
    rate(dns_packet_errors_total[5m])
    ```
 
-## 📈 Pre-built Dashboards
+## 📈 Available Dashboards
 
 The following dashboards are automatically provisioned:
 
-- **DNS Overview** - High-level DNS server metrics
-- **DNS Error Analysis** - Error tracking and analysis
-- **DNS Protocol** - Protocol-level statistics
-- **DNS Record Management** - Record CRUD operations
-- **Simple Test Dashboard** - Basic metrics for testing
+- **DNS Overview** - High-level DNS server metrics and performance
+- **DNS Canary** - External monitoring and health checks  
+- **DNS System Metrics** - Infrastructure and system-level metrics
+- **DNS Protocol** - Protocol-level statistics and analysis
+- **DNS Record Management** - Record CRUD operations and management
+- **DNS Infrastructure** - Infrastructure monitoring and capacity
+- **DNS Errors** - Error tracking and troubleshooting
 
 ## 🛠 Troubleshooting
 

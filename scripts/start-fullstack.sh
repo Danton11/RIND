@@ -366,7 +366,7 @@ scale_servers() {
 show_urls() {
     echo
     log "Access URLs:"
-    echo -e "  ${BLUE}Grafana Dashboard:${NC}    http://localhost:3000 (admin/rind-admin-2025)"
+    echo -e "  ${BLUE}Grafana Dashboards:${NC}   http://localhost:3000 (admin/rind-admin-2025)"
     echo -e "  ${BLUE}Prometheus Metrics:${NC}   http://localhost:9090"
     echo -e "  ${BLUE}AlertManager:${NC}         http://localhost:9093"
     echo -e "  ${BLUE}HAProxy Stats:${NC}        http://localhost:8404/stats"

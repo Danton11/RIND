@@ -8,9 +8,9 @@ A high-performance DNS server implementation in Rust with real-time API updates 
 - ⚡ **Real-time Updates**: 12ms end-to-end API to DNS resolution
 - 🛡️ **Robust**: Handles malformed packets and edge cases gracefully  
 - 🔄 **Live Updates**: REST API for dynamic DNS record management
-- 📊 **Production Ready**: Comprehensive test suite with stress testing
+- 📊 **Production Ready**: Full test suite with stress testing
 - 🎯 **Protocol Compliant**: Full DNS protocol implementation
-- 📈 **Comprehensive Metrics**: Prometheus-compatible metrics with query tracking, latency measurement, and error monitoring
+- 📈 **Metrics & Monitoring**: Prometheus-compatible metrics with query tracking, latency measurement, and error monitoring
 
 ## Quick Start
 
@@ -90,7 +90,7 @@ dig @127.0.0.1 -p 12312 example.com
 
 ### Monitoring and Metrics
 
-The server exposes comprehensive Prometheus-compatible metrics for monitoring:
+The server exposes Prometheus-compatible metrics for monitoring:
 
 ```bash
 # View all metrics
@@ -111,9 +111,9 @@ curl http://127.0.0.1:9090/metrics
 
 **📊 For detailed metrics documentation, see [METRICS.md](METRICS.md)**
 
-### Comprehensive Structured Logging
+### Structured Logging
 
-The server features comprehensive structured logging with tracing spans and rich contextual information, writing logs to timestamped files in the `logs/` directory:
+The server features structured logging with tracing spans and contextual information, writing logs to timestamped files in the `logs/` directory:
 
 ```bash
 # Log files are automatically created with format:

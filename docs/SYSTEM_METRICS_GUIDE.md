@@ -4,7 +4,7 @@ This guide covers the RIND system metrics monitoring setup, including the custom
 
 ## Overview
 
-The RIND system metrics monitoring provides comprehensive visibility into:
+The RIND system metrics monitoring provides visibility into:
 
 - **Process Metrics**: CPU usage, memory consumption, and uptime for RIND processes
 - **Docker Metrics**: Container status and health monitoring

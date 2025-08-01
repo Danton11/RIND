@@ -1,6 +1,6 @@
 # RIND DNS Server - Full Stack Deployment
 
-This document describes the complete production-ready deployment of RIND DNS Server with comprehensive monitoring, load balancing, and observability.
+This document describes the production deployment of RIND DNS Server with monitoring, load balancing, and observability.
 
 ## 🚀 Quick Start
 

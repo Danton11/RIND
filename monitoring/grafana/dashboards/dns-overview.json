@@ -170,9 +170,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(dns_queries_per_second)",
+          "expr": "sum(rate(dns_queries_total[1m]))",
           "interval": "",
-          "legendFormat": "Total QPS",
+          "legendFormat": "Current QPS",
           "refId": "A"
         }
       ],
@@ -233,7 +233,23 @@
           },
           "unit": "s"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Canary Avg"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -273,6 +289,16 @@
           "interval": "",
           "legendFormat": "50th percentile",
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "dns_canary_response_time_seconds_avg",
+          "interval": "",
+          "legendFormat": "Canary Avg",
+          "refId": "C"
         }
       ],
       "title": "DNS Query Response Time",
@@ -293,20 +319,22 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
                 "color": "yellow",
-                "value": 100
+                "value": 0.95
               },
               {
-                "color": "red",
-                "value": 1000
+                "color": "green",
+                "value": 0.99
               }
             ]
           },
-          "unit": "short"
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0
         },
         "overrides": []
       },
@@ -315,6 +343,66 @@
         "w": 12,
         "x": 12,
         "y": 8
+      },
+      "id": 9,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "dns_canary_availability",
+          "interval": "",
+          "legendFormat": "DNS Availability",
+          "refId": "A"
+        }
+      ],
+      "title": "DNS Server Availability",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 16
       },
       "id": 4,
       "options": {
@@ -339,7 +427,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(dns_queries_total)",
+          "expr": "sum(dns_queries_total) or sum(dns_canary_queries_total)",
           "interval": "",
           "legendFormat": "Total Queries",
           "refId": "A"
@@ -363,16 +451,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 50
-              },
-              {
-                "color": "red",
-                "value": 100
               }
             ]
           },
@@ -383,7 +463,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 0,
+        "x": 6,
         "y": 16
       },
       "id": 5,
@@ -409,13 +489,13 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(dns_responses_total)",
+          "expr": "sum(dns_responses_total) or sum(dns_canary_queries_success_total)",
           "interval": "",
           "legendFormat": "Total Responses",
           "refId": "A"
         }
       ],
-      "title": "Total Responses",
+      "title": "Total Successful Responses",
       "type": "stat"
     },
     {
@@ -435,6 +515,14 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.1
               }
             ]
           },
@@ -445,7 +533,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 6,
+        "x": 12,
         "y": 16
       },
       "id": 6,
@@ -471,7 +559,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(dns_query_duration_seconds_sum) / sum(dns_query_duration_seconds_count)",
+          "expr": "sum(dns_query_duration_seconds_sum) / sum(dns_query_duration_seconds_count) or dns_canary_response_time_seconds_avg",
           "interval": "",
           "legendFormat": "Avg Duration",
           "refId": "A"
@@ -515,7 +603,7 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 16
       },
       "id": 7,
@@ -541,13 +629,13 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(dns_nxdomain_total) + sum(dns_servfail_total)",
+          "expr": "sum(dns_servfail_total) or sum(dns_canary_queries_servfail_total) + sum(dns_canary_queries_timeout_total) + sum(dns_canary_queries_error_total)",
           "interval": "",
-          "legendFormat": "Total Errors",
+          "legendFormat": "Server Errors",
           "refId": "A"
         }
       ],
-      "title": "Total DNS Errors",
+      "title": "DNS Server Errors (SERVFAIL/Timeout)",
       "type": "stat"
     },
     {
@@ -570,11 +658,11 @@
               },
               {
                 "color": "yellow",
-                "value": 10
+                "value": 5
               },
               {
                 "color": "red",
-                "value": 25
+                "value": 15
               }
             ]
           },
@@ -585,8 +673,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 18,
-        "y": 16
+        "x": 0,
+        "y": 20
       },
       "id": 8,
       "options": {
@@ -611,13 +699,215 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(sum(dns_nxdomain_total) + sum(dns_servfail_total)) / sum(dns_queries_total) * 100",
+          "expr": "(sum(dns_servfail_total) / sum(dns_queries_total) * 100) or ((sum(dns_canary_queries_servfail_total) + sum(dns_canary_queries_timeout_total) + sum(dns_canary_queries_error_total)) / sum(dns_canary_queries_total) * 100)",
           "interval": "",
           "legendFormat": "Error Rate %",
           "refId": "A"
         }
       ],
-      "title": "DNS Error Rate %",
+      "title": "DNS Error Rate % (Server Issues Only)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 20
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "text": {},
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(dns_nxdomain_total) or sum(dns_canary_queries_nxdomain_total)",
+          "interval": "",
+          "legendFormat": "NXDOMAIN Responses",
+          "refId": "A"
+        }
+      ],
+      "title": "NXDOMAIN Responses (Valid)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 20
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "text": {},
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "dns_canary_consecutive_failures",
+          "interval": "",
+          "legendFormat": "Consecutive Failures",
+          "refId": "A"
+        }
+      ],
+      "title": "Consecutive Failures",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 20
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "text": {},
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "dns_canary_time_since_last_success_seconds",
+          "interval": "",
+          "legendFormat": "Time Since Success",
+          "refId": "A"
+        }
+      ],
+      "title": "Time Since Last Success",
       "type": "stat"
     }
   ],
@@ -626,7 +916,8 @@
   "style": "dark",
   "tags": [
     "dns",
-    "overview"
+    "overview",
+    "improved"
   ],
   "templating": {
     "list": []

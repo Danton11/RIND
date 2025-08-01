@@ -120,7 +120,7 @@ docker-compose -f docker/docker-compose.monitoring.yml up
 2. **Easier Navigation**: Related files are grouped together
 3. **Cleaner Root Directory**: Less clutter in the main project directory
 4. **Better Gitignore Management**: Runtime files properly excluded
-5. **Improved Docker Context**: All Docker files in one place with proper context
+5. **Docker Organization**: All Docker files in one place with proper context
 6. **Centralized Documentation**: All docs in one location
 7. **Monitoring Organization**: All observability configs consolidated
 
