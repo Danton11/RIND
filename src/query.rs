@@ -11,6 +11,11 @@ pub async fn handle_query(query: DnsQuery, records: Arc<RwLock<HashMap<String, c
     response
 }
 
+/// Find a record by name in the UUID-indexed records
+fn find_record_by_name<'a>(records: &'a HashMap<String, crate::update::DnsRecord>, name: &str) -> Option<&'a crate::update::DnsRecord> {
+    records.values().find(|record| record.name == name)
+}
+
 /// Handles DNS query and returns response packet with response code
 pub async fn handle_query_with_code(query: DnsQuery, records: Arc<RwLock<HashMap<String, crate::update::DnsRecord>>>) -> (Vec<u8>, u8) {
     debug!("Handling query {:?}", query);
@@ -26,7 +31,7 @@ pub async fn handle_query_with_code(query: DnsQuery, records: Arc<RwLock<HashMap
 
     let question_name = &query.questions[0].name;
 
-    let (ip, response_code, ttl, record_type, class) = if let Some(record) = records.get(question_name) {
+    let (ip, response_code, ttl, record_type, class) = if let Some(record) = find_record_by_name(&records, question_name) {
         debug!("Found record for {}", question_name);
         (
             record.ip.unwrap_or_else(|| Ipv4Addr::new(0, 0, 0, 0)),

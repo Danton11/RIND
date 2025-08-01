@@ -133,7 +133,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_nxdomain_total[5m]))",
+          "expr": "sum(rate(dns_nxdomain_total[1m]))",
           "interval": "",
           "legendFormat": "NXDOMAIN",
           "refId": "A"
@@ -143,7 +143,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_servfail_total[5m]))",
+          "expr": "sum(rate(dns_servfail_total[1m]))",
           "interval": "",
           "legendFormat": "SERVFAIL",
           "refId": "B"
@@ -211,7 +211,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_nxdomain_total[5m]))",
+          "expr": "sum(rate(dns_nxdomain_total[1m]))",
           "interval": "",
           "legendFormat": "NXDOMAIN Rate",
           "refId": "A"
@@ -279,7 +279,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_servfail_total[5m]))",
+          "expr": "sum(rate(dns_servfail_total[1m]))",
           "interval": "",
           "legendFormat": "SERVFAIL Rate",
           "refId": "A"
@@ -648,7 +648,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(sum(rate(dns_nxdomain_total[5m])) + sum(rate(dns_servfail_total[5m]))) / sum(rate(dns_queries_total[5m])) * 100",
+          "expr": "(sum(rate(dns_nxdomain_total[1m])) + sum(rate(dns_servfail_total[1m]))) / sum(rate(dns_queries_total[1m])) * 100",
           "interval": "",
           "legendFormat": "Error Rate %",
           "refId": "A"

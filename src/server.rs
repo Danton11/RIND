@@ -347,14 +347,15 @@ mod tests {
     async fn test_handle_packet_with_metrics() {
         // Create test data
         let mut records = HashMap::new();
-        records.insert("test.com".to_string(), DnsRecord {
-            name: "test.com".to_string(),
-            ip: Some(Ipv4Addr::new(1, 2, 3, 4)),
-            ttl: 300,
-            record_type: "A".to_string(),
-            class: "IN".to_string(),
-            value: None,
-        });
+        let record = DnsRecord::new(
+            "test.com".to_string(),
+            Some(Ipv4Addr::new(1, 2, 3, 4)),
+            300,
+            "A".to_string(),
+            "IN".to_string(),
+            None,
+        );
+        records.insert(record.id.clone(), record);
         let records = Arc::new(RwLock::new(records));
         
         // Create metrics registry

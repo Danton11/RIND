@@ -224,7 +224,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_responses_total{response_code=\"NOERROR\"}[5m]))",
+          "expr": "sum(rate(dns_responses_total{response_code=\"NOERROR\"}[1m]))",
           "interval": "",
           "legendFormat": "NOERROR",
           "refId": "A"
@@ -234,7 +234,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_responses_total{response_code=\"NXDOMAIN\"}[5m]))",
+          "expr": "sum(rate(dns_responses_total{response_code=\"NXDOMAIN\"}[1m]))",
           "interval": "",
           "legendFormat": "NXDOMAIN",
           "refId": "B"
@@ -244,7 +244,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_responses_total{response_code=\"SERVFAIL\"}[5m]))",
+          "expr": "sum(rate(dns_responses_total{response_code=\"SERVFAIL\"}[1m]))",
           "interval": "",
           "legendFormat": "SERVFAIL",
           "refId": "C"
@@ -254,7 +254,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_responses_total{response_code=\"REFUSED\"}[5m]))",
+          "expr": "sum(rate(dns_responses_total{response_code=\"REFUSED\"}[1m]))",
           "interval": "",
           "legendFormat": "REFUSED",
           "refId": "D"
@@ -343,7 +343,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"A\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"A\"}[1m]))",
           "interval": "",
           "legendFormat": "A Records",
           "refId": "A"
@@ -353,7 +353,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"AAAA\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"AAAA\"}[1m]))",
           "interval": "",
           "legendFormat": "AAAA Records",
           "refId": "B"
@@ -363,7 +363,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"MX\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"MX\"}[1m]))",
           "interval": "",
           "legendFormat": "MX Records",
           "refId": "C"
@@ -373,7 +373,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"CNAME\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"CNAME\"}[1m]))",
           "interval": "",
           "legendFormat": "CNAME Records",
           "refId": "D"
@@ -383,7 +383,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"TXT\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"TXT\"}[1m]))",
           "interval": "",
           "legendFormat": "TXT Records",
           "refId": "E"
@@ -393,7 +393,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(dns_queries_total{query_type=\"NS\"}[5m]))",
+          "expr": "sum(rate(dns_queries_total{query_type=\"NS\"}[1m]))",
           "interval": "",
           "legendFormat": "NS Records",
           "refId": "F"

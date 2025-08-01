@@ -14,6 +14,168 @@ mod metrics;
 
 const DNS_RECORDS_FILE: &str = "dns_records.txt";
 
+// Handler for GET /records/{id} endpoint
+async fn get_record_handler(
+    id: String,
+    records: Arc<RwLock<update::DnsRecords>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    match update::get_record(records, &id).await {
+        Ok(record) => {
+            let response = update::ApiResponse::success(record);
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                warp::http::StatusCode::OK,
+            ))
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                status_code,
+            ))
+        }
+    }
+}
+
+// Handler for PUT /records/{id} endpoint
+async fn update_record_handler(
+    id: String,
+    update_request: update::UpdateRecordRequest,
+    records: Arc<RwLock<update::DnsRecords>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    match update::update_record(records, &id, update_request).await {
+        Ok(record) => {
+            let response = update::ApiResponse::success(record);
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                warp::http::StatusCode::OK,
+            ))
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                status_code,
+            ))
+        }
+    }
+}
+
+// Handler for DELETE /records/{id} endpoint
+async fn delete_record_handler(
+    id: String,
+    records: Arc<RwLock<update::DnsRecords>>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    match update::delete_record(records, &id).await {
+        Ok(()) => {
+            // Return HTTP 204 No Content on successful deletion
+            Ok(Box::new(warp::reply::with_status(
+                warp::reply(),
+                warp::http::StatusCode::NO_CONTENT,
+            )))
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<()>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Ok(Box::new(warp::reply::with_status(
+                warp::reply::json(&response),
+                status_code,
+            )))
+        }
+    }
+}
+
+// Handler for GET /records endpoint with pagination
+async fn list_records_handler(
+    query_params: std::collections::HashMap<String, String>,
+    records: Arc<RwLock<update::DnsRecords>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    // Parse pagination parameters with defaults
+    let page = query_params
+        .get("page")
+        .and_then(|p| p.parse::<usize>().ok())
+        .unwrap_or(1);
+    
+    let per_page = query_params
+        .get("per_page")
+        .and_then(|p| p.parse::<usize>().ok())
+        .unwrap_or(50);
+
+    match update::list_records(records, page, per_page).await {
+        Ok(record_list) => {
+            let response = update::ApiResponse::success(record_list);
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                warp::http::StatusCode::OK,
+            ))
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<update::RecordListResponse>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                status_code,
+            ))
+        }
+    }
+}
+
+// Handler for POST /records endpoint for new record creation
+async fn create_record_handler(
+    create_request: update::CreateRecordRequest,
+    records: Arc<RwLock<update::DnsRecords>>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    match update::create_record_from_request(records, create_request).await {
+        Ok(record) => {
+            let response = update::ApiResponse::success(record);
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                warp::http::StatusCode::CREATED,
+            ))
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                status_code,
+            ))
+        }
+    }
+}
+
 fn setup_file_logging() -> Result<(), Box<dyn std::error::Error>> {
     // Create logs directory if it doesn't exist
     fs::create_dir_all("logs")?;
@@ -94,6 +256,12 @@ async fn main() {
         }
     };
 
+    // Ensure datastore is initialized before loading records
+    if let Err(e) = update::ensure_datastore_initialized(DNS_RECORDS_FILE) {
+        error!("Failed to initialize datastore: {}", e);
+        std::process::exit(1);
+    }
+    
     // Load DNS records and create shared references
     let records = update::load_records(DNS_RECORDS_FILE);
     let records_for_filter = Arc::clone(&records);
@@ -101,17 +269,58 @@ async fn main() {
 
     let records_filter = warp::any().map(move || Arc::clone(&records_for_filter));
     
-    // API route for updating DNS records
+    // API route for updating DNS records (legacy)
     let update_route = warp::path("update")
         .and(warp::post())
         .and(warp::body::json())
         .and(records_filter.clone())
         .map(|new_record: update::DnsRecord, records: Arc<RwLock<update::DnsRecords>>| {
             tokio::spawn(async move {
-                update::update_record(records, new_record).await;
+                update::update_record_legacy(records, new_record).await;
             });
             warp::reply::reply()
         });
+
+    // GET /records/{id} - Retrieve a specific record by ID
+    let get_record_route = warp::path("records")
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(records_filter.clone())
+        .and_then(get_record_handler);
+
+    // PUT /records/{id} - Update an existing record by ID
+    let update_record_route = warp::path("records")
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(records_filter.clone())
+        .and_then(update_record_handler);
+
+    // DELETE /records/{id} - Delete a record by ID
+    let delete_record_route = warp::path("records")
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::delete())
+        .and(records_filter.clone())
+        .and_then(delete_record_handler);
+
+    // GET /records - List all records with pagination
+    let list_records_route = warp::path("records")
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::query::<std::collections::HashMap<String, String>>())
+        .and(records_filter.clone())
+        .and_then(list_records_handler);
+
+    // POST /records - Create new record
+    let create_record_route = warp::path("records")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(records_filter.clone())
+        .and_then(create_record_handler);
 
     // Start metrics server in background
     let metrics_addr = format!("0.0.0.0:{}", metrics_port);
@@ -127,10 +336,18 @@ async fn main() {
 
     info!("Metrics server listening on http://{}/metrics", metrics_addr);
 
+    // Combine all API routes
+    let api_routes = update_route
+        .or(get_record_route)
+        .or(update_record_route)
+        .or(delete_record_route)
+        .or(list_records_route)
+        .or(create_record_route);
+
     // Start API server in background
     let api_addr_clone = api_addr.clone();
     let api_server = async move {
-        warp::serve(update_route).run(api_addr_clone.parse::<std::net::SocketAddr>().unwrap()).await;
+        warp::serve(api_routes).run(api_addr_clone.parse::<std::net::SocketAddr>().unwrap()).await;
     };
 
     info!("API server listening on {}", api_addr);
