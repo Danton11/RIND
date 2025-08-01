@@ -33,7 +33,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         id: String,
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-        match rind::update::delete_record(records, &id).await {
+        match rind::update::delete_record(records, &id, None).await {
             Ok(()) => {
                 // Return HTTP 204 No Content on successful deletion
                 Ok(Box::new(warp::reply::with_status(
@@ -63,7 +63,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         id: String,
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        match rind::update::get_record(records, &id).await {
+        match rind::update::get_record(records, &id, None).await {
             Ok(record) => {
                 let response = ApiResponse::success(record);
                 Ok(warp::reply::with_status(
@@ -214,7 +214,7 @@ async fn test_delete_record_multiple_records() {
         id: String,
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-        match rind::update::delete_record(records, &id).await {
+        match rind::update::delete_record(records, &id, None).await {
             Ok(()) => {
                 Ok(Box::new(warp::reply::with_status(
                     warp::reply(),

@@ -1,0 +1,156 @@
+groups:
+  - name: rind-record-management
+    rules:
+      # High error rate alert for record operations
+      - alert: RecordOperationHighErrorRate
+        expr: |
+          (
+            rate(record_operations_total{status="failure"}[5m]) / 
+            (rate(record_operations_total{status="success"}[5m]) + rate(record_operations_total{status="failure"}[5m]))
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "High error rate in DNS record operations"
+          description: "Record operation error rate is {{ $value | humanizePercentage }} for the last 5 minutes, which is above the 5% threshold."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#record-operations"
+
+      # Slow response time alert for record operations
+      - alert: RecordOperationSlowResponseTime
+        expr: |
+          histogram_quantile(0.95, rate(record_operation_duration_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "Slow response times for DNS record operations"
+          description: "95th percentile response time for record operations is {{ $value | humanizeDuration }}, which is above the 100ms threshold."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#slow-operations"
+
+      # High API error rate alert
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            rate(api_requests_total{status=~"4..|5.."}[5m]) / 
+            rate(api_requests_total[5m])
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: api
+        annotations:
+          summary: "High error rate in DNS record management API"
+          description: "API error rate is {{ $value | humanizePercentage }} for the last 5 minutes, which is above the 5% threshold."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#api-errors"
+
+      # Slow API response time alert
+      - alert: APISlowResponseTime
+        expr: |
+          histogram_quantile(0.95, rate(api_request_duration_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: api
+        annotations:
+          summary: "Slow API response times"
+          description: "95th percentile API response time is {{ $value | humanizeDuration }}, which is above the 100ms threshold."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#slow-api"
+
+      # High validation error rate
+      - alert: HighValidationErrorRate
+        expr: |
+          rate(record_operations_failed_total{error_type="validation_error"}[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "High validation error rate"
+          description: "Validation error rate is {{ $value | humanize }} errors/sec, indicating potential client issues or malformed requests."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#validation-errors"
+
+      # High duplicate record error rate
+      - alert: HighDuplicateRecordErrorRate
+        expr: |
+          rate(record_operations_failed_total{error_type="duplicate_record"}[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "High duplicate record error rate"
+          description: "Duplicate record error rate is {{ $value | humanize }} errors/sec, indicating potential client retry issues or race conditions."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#duplicate-records"
+
+      # I/O error rate alert
+      - alert: RecordManagementIOErrors
+        expr: |
+          rate(record_operations_failed_total{error_type="io_error"}[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "I/O errors in record management"
+          description: "I/O error rate is {{ $value | humanize }} errors/sec, indicating potential disk or file system issues."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#io-errors"
+
+      # Unusual operation patterns - sudden spike in operations
+      - alert: UnusualOperationSpike
+        expr: |
+          (
+            rate(record_operations_total[5m]) > 
+            (avg_over_time(rate(record_operations_total[5m])[1h]) * 3)
+          ) and (
+            rate(record_operations_total[5m]) > 10
+          )
+        for: 2m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "Unusual spike in record operations"
+          description: "Current operation rate ({{ $value | humanize }} ops/sec) is 3x higher than the 1-hour average, indicating unusual activity."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#unusual-patterns"
+
+      # Record count anomaly detection
+      - alert: RecordCountAnomalyDetection
+        expr: |
+          abs(
+            active_records_total - 
+            avg_over_time(active_records_total[1h])
+          ) > (stddev_over_time(active_records_total[1h]) * 3)
+        for: 5m
+        labels:
+          severity: warning
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "Anomalous change in active record count"
+          description: "Active record count ({{ $value | humanize }}) has deviated significantly from the normal range, indicating potential data loss or bulk operations."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#record-count-anomaly"
+
+      # Service availability - no operations for extended period
+      - alert: RecordManagementServiceDown
+        expr: |
+          rate(record_operations_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: rind-dns
+          component: record-management
+        annotations:
+          summary: "Record management service appears to be down"
+          description: "No record operations have been recorded for the last 10 minutes, indicating the service may be down or not receiving requests."
+          runbook_url: "https://wiki.example.com/rind-dns-troubleshooting#service-down"

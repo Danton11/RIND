@@ -20,7 +20,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         create_request: CreateRecordRequest,
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        match rind::update::create_record_from_request(records, create_request).await {
+        match rind::update::create_record_from_request(records, create_request, None).await {
             Ok(record) => {
                 let response = ApiResponse::success(record);
                 Ok(warp::reply::with_status(
@@ -50,7 +50,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         id: String,
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        match rind::update::get_record(records, &id).await {
+        match rind::update::get_record(records, &id, None).await {
             Ok(record) => {
                 let response = ApiResponse::success(record);
                 Ok(warp::reply::with_status(

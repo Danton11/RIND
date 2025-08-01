@@ -14,18 +14,56 @@ mod metrics;
 
 const DNS_RECORDS_FILE: &str = "dns_records.txt";
 
+// Helper function to record API metrics
+async fn record_api_metrics(
+    endpoint: &str,
+    method: &str,
+    status_code: u16,
+    duration: f64,
+    metrics_registry: &Arc<RwLock<metrics::MetricsRegistry>>,
+) {
+    let registry = metrics_registry.read().await;
+    let status_str = status_code.to_string();
+    registry.dns_metrics().record_api_request(endpoint, method, &status_str, duration);
+    
+    // Record error if status code indicates an error
+    if status_code >= 400 {
+        let error_type = match status_code {
+            400 => "bad_request",
+            401 => "unauthorized", 
+            403 => "forbidden",
+            404 => "not_found",
+            409 => "conflict",
+            500 => "internal_server_error",
+            _ => "other_error",
+        };
+        registry.dns_metrics().record_api_error(endpoint, error_type);
+    }
+}
+
 // Handler for GET /records/{id} endpoint
 async fn get_record_handler(
     id: String,
     records: Arc<RwLock<update::DnsRecords>>,
+    metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match update::get_record(records, &id).await {
+    let start_time = std::time::Instant::now();
+    let endpoint = "/records/{id}";
+    let method = "GET";
+    
+    let result = match update::get_record(records, &id, Some(metrics_registry.clone())).await {
         Ok(record) => {
             let response = update::ApiResponse::success(record);
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 warp::http::StatusCode::OK,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
         Err(e) => {
             let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
@@ -36,12 +74,20 @@ async fn get_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 status_code,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
-    }
+    };
+    
+    result
 }
 
 // Handler for PUT /records/{id} endpoint
@@ -49,14 +95,25 @@ async fn update_record_handler(
     id: String,
     update_request: update::UpdateRecordRequest,
     records: Arc<RwLock<update::DnsRecords>>,
+    metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match update::update_record(records, &id, update_request).await {
+    let start_time = std::time::Instant::now();
+    let endpoint = "/records/{id}";
+    let method = "PUT";
+    
+    let result = match update::update_record(records, &id, update_request, Some(metrics_registry.clone())).await {
         Ok(record) => {
             let response = update::ApiResponse::success(record);
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 warp::http::StatusCode::OK,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
         Err(e) => {
             let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
@@ -67,26 +124,46 @@ async fn update_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 status_code,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
-    }
+    };
+    
+    result
 }
 
 // Handler for DELETE /records/{id} endpoint
 async fn delete_record_handler(
     id: String,
     records: Arc<RwLock<update::DnsRecords>>,
+    metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    match update::delete_record(records, &id).await {
+    let start_time = std::time::Instant::now();
+    let endpoint = "/records/{id}";
+    let method = "DELETE";
+    
+    let result = match update::delete_record(records, &id, Some(metrics_registry.clone())).await {
         Ok(()) => {
             // Return HTTP 204 No Content on successful deletion
-            Ok(Box::new(warp::reply::with_status(
-                warp::reply(),
+            let response = update::ApiResponse::<()>::success(());
+            let reply = Box::new(warp::reply::with_status(
+                warp::reply::json(&response),
                 warp::http::StatusCode::NO_CONTENT,
-            )))
+            )) as Box<dyn warp::Reply>;
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 204, duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
         Err(e) => {
             let response = update::ApiResponse::<()>::error(e.to_string());
@@ -97,19 +174,31 @@ async fn delete_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok(Box::new(warp::reply::with_status(
+            let reply = Box::new(warp::reply::with_status(
                 warp::reply::json(&response),
                 status_code,
-            )))
+            )) as Box<dyn warp::Reply>;
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
-    }
+    };
+    
+    result
 }
 
 // Handler for GET /records endpoint with pagination
 async fn list_records_handler(
     query_params: std::collections::HashMap<String, String>,
     records: Arc<RwLock<update::DnsRecords>>,
+    metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    let start_time = std::time::Instant::now();
+    let endpoint = "/records";
+    let method = "GET";
     // Parse pagination parameters with defaults
     let page = query_params
         .get("page")
@@ -121,13 +210,19 @@ async fn list_records_handler(
         .and_then(|p| p.parse::<usize>().ok())
         .unwrap_or(50);
 
-    match update::list_records(records, page, per_page).await {
+    let result = match update::list_records(records, page, per_page, Some(metrics_registry.clone())).await {
         Ok(record_list) => {
             let response = update::ApiResponse::success(record_list);
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 warp::http::StatusCode::OK,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
         Err(e) => {
             let response = update::ApiResponse::<update::RecordListResponse>::error(e.to_string());
@@ -138,26 +233,45 @@ async fn list_records_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 status_code,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
-    }
+    };
+    
+    result
 }
 
 // Handler for POST /records endpoint for new record creation
 async fn create_record_handler(
     create_request: update::CreateRecordRequest,
     records: Arc<RwLock<update::DnsRecords>>,
+    metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match update::create_record_from_request(records, create_request).await {
+    let start_time = std::time::Instant::now();
+    let endpoint = "/records";
+    let method = "POST";
+    
+    let result = match update::create_record_from_request(records, create_request, Some(metrics_registry.clone())).await {
         Ok(record) => {
             let response = update::ApiResponse::success(record);
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 warp::http::StatusCode::CREATED,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 201, duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
         Err(e) => {
             let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
@@ -168,12 +282,20 @@ async fn create_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            Ok(warp::reply::with_status(
+            let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 status_code,
-            ))
+            );
+            
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
+            
+            Ok(reply)
         }
-    }
+    };
+    
+    result
 }
 
 fn setup_file_logging() -> Result<(), Box<dyn std::error::Error>> {
@@ -267,7 +389,19 @@ async fn main() {
     let records_for_filter = Arc::clone(&records);
     let records_for_server = Arc::clone(&records);
 
+    // Initialize active records count metric
+    {
+        let records_guard = records.read().await;
+        let metrics_guard = metrics_registry.read().await;
+        metrics_guard.dns_metrics().set_active_records_count(records_guard.len() as f64);
+        info!("Initialized active records count: {}", records_guard.len());
+    }
+
     let records_filter = warp::any().map(move || Arc::clone(&records_for_filter));
+    
+    // Create metrics filter
+    let metrics_for_filter = Arc::clone(&metrics_registry);
+    let metrics_filter = warp::any().map(move || Arc::clone(&metrics_for_filter));
     
     // API route for updating DNS records (legacy)
     let update_route = warp::path("update")
@@ -287,6 +421,7 @@ async fn main() {
         .and(warp::path::end())
         .and(warp::get())
         .and(records_filter.clone())
+        .and(metrics_filter.clone())
         .and_then(get_record_handler);
 
     // PUT /records/{id} - Update an existing record by ID
@@ -296,6 +431,7 @@ async fn main() {
         .and(warp::put())
         .and(warp::body::json())
         .and(records_filter.clone())
+        .and(metrics_filter.clone())
         .and_then(update_record_handler);
 
     // DELETE /records/{id} - Delete a record by ID
@@ -304,6 +440,7 @@ async fn main() {
         .and(warp::path::end())
         .and(warp::delete())
         .and(records_filter.clone())
+        .and(metrics_filter.clone())
         .and_then(delete_record_handler);
 
     // GET /records - List all records with pagination
@@ -312,6 +449,7 @@ async fn main() {
         .and(warp::get())
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .and(records_filter.clone())
+        .and(metrics_filter.clone())
         .and_then(list_records_handler);
 
     // POST /records - Create new record
@@ -320,6 +458,7 @@ async fn main() {
         .and(warp::post())
         .and(warp::body::json())
         .and(records_filter.clone())
+        .and(metrics_filter.clone())
         .and_then(create_record_handler);
 
     // Start metrics server in background

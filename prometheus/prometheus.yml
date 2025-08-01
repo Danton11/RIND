@@ -5,8 +5,7 @@ global:
     monitor: 'dns-server-monitor'
 
 rule_files:
-  # - "first_rules.yml"
-  # - "second_rules.yml"
+  - "record-management-alerts.yml"
 
 scrape_configs:
   # Prometheus self-monitoring

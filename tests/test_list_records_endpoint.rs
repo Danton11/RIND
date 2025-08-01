@@ -74,7 +74,7 @@ async fn list_records_handler(
         .and_then(|p| p.parse::<usize>().ok())
         .unwrap_or(50);
 
-    match rind::update::list_records(records, page, per_page).await {
+    match rind::update::list_records(records, page, per_page, None).await {
         Ok(record_list) => {
             let response = ApiResponse::success(record_list);
             Ok(warp::reply::with_status(

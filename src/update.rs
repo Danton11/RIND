@@ -523,23 +523,42 @@ pub async fn create_record(
     record_type: String,
     class: String,
     value: Option<String>,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
+    let start_time = std::time::Instant::now();
     // Create new record with generated UUID and timestamps
     let new_record = DnsRecord::new(name.clone(), ip, ttl, record_type, class, value);
     
     // Validate the record data
-    new_record.validate()?;
+    if let Err(validation_error) = new_record.validate() {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("create", "validation_error", duration);
+        }
+        return Err(RecordError::ValidationError(validation_error));
+    }
     
     let mut records_guard = records.write().await;
     
     // Check for duplicate names (same name with same type)
     for existing_record in records_guard.values() {
         if existing_record.name == new_record.name && existing_record.record_type == new_record.record_type {
-            return Err(RecordError::DuplicateRecord(format!(
+            let error = RecordError::DuplicateRecord(format!(
                 "Record with name '{}' and type '{}' already exists", 
                 new_record.name, 
                 new_record.record_type
-            )));
+            ));
+            
+            // Record metrics for failed operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_failure("create", "duplicate_record", duration);
+            }
+            
+            return Err(error);
         }
     }
     
@@ -548,10 +567,26 @@ pub async fn create_record(
     records_guard.insert(record_id.clone(), new_record.clone());
     
     // Persist to file immediately
-    save_records_to_file("dns_records.txt", &*records_guard)?;
+    if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("create", "io_error", duration);
+        }
+        return Err(RecordError::IoError(io_error));
+    }
     
     info!("Created new record with ID {}: {}", record_id, name);
     debug!("New record details: {:?}", new_record);
+    
+    // Record metrics for successful operation
+    if let Some(registry) = &metrics_registry {
+        let duration = start_time.elapsed().as_secs_f64();
+        let registry_guard = registry.read().await;
+        registry_guard.dns_metrics().record_operation_success("create", duration);
+        registry_guard.dns_metrics().set_active_records_count(records_guard.len() as f64);
+    }
     
     Ok(new_record)
 }
@@ -560,7 +595,8 @@ pub async fn create_record(
 /// Handles request validation, UUID generation, and returns HTTP 201 with created record details
 pub async fn create_record_from_request(
     records: Arc<RwLock<DnsRecords>>, 
-    create_request: CreateRecordRequest
+    create_request: CreateRecordRequest,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
     // Parse IP address if provided
     let ip = if let Some(ip_str) = create_request.ip {
@@ -590,6 +626,7 @@ pub async fn create_record_from_request(
         record_type,
         class,
         create_request.value,
+        metrics_registry,
     ).await
 }
 
@@ -597,17 +634,35 @@ pub async fn create_record_from_request(
 /// Uses efficient HashMap lookup for O(1) retrieval
 pub async fn get_record(
     records: Arc<RwLock<DnsRecords>>, 
-    id: &str
+    id: &str,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
+    let start_time = std::time::Instant::now();
     let records_guard = records.read().await;
     
     match records_guard.get(id) {
         Some(record) => {
             debug!("Retrieved record with ID {}: {}", id, record.name);
+            
+            // Record metrics for successful operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_success("read", duration);
+            }
+            
             Ok(record.clone())
         }
         None => {
             debug!("Record not found with ID: {}", id);
+            
+            // Record metrics for failed operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_failure("read", "not_found", duration);
+            }
+            
             Err(RecordError::NotFound(format!("Record with ID '{}' not found", id)))
         }
     }
@@ -618,18 +673,32 @@ pub async fn get_record(
 pub async fn list_records(
     records: Arc<RwLock<DnsRecords>>, 
     page: usize, 
-    per_page: usize
+    per_page: usize,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<RecordListResponse, RecordError> {
+    let start_time = std::time::Instant::now();
     let records_guard = records.read().await;
     
     // Validate pagination parameters
     if page == 0 {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("list", "validation_error", duration);
+        }
         return Err(RecordError::ValidationError(ValidationError::InvalidTtl(
             "Page number must be greater than 0".to_string()
         )));
     }
     
     if per_page == 0 || per_page > 1000 {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("list", "validation_error", duration);
+        }
         return Err(RecordError::ValidationError(ValidationError::InvalidTtl(
             "Per page must be between 1 and 1000".to_string()
         )));
@@ -653,6 +722,13 @@ pub async fn list_records(
     
     debug!("Listed {} records (page {}, per_page {})", paginated_records.len(), page, per_page);
     
+    // Record metrics for successful operation
+    if let Some(registry) = &metrics_registry {
+        let duration = start_time.elapsed().as_secs_f64();
+        let registry_guard = registry.read().await;
+        registry_guard.dns_metrics().record_operation_success("list", duration);
+    }
+    
     Ok(RecordListResponse {
         records: paginated_records,
         total,
@@ -666,14 +742,22 @@ pub async fn list_records(
 pub async fn update_record(
     records: Arc<RwLock<DnsRecords>>, 
     id: &str, 
-    update_request: UpdateRecordRequest
+    update_request: UpdateRecordRequest,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
+    let start_time = std::time::Instant::now();
     let mut records_guard = records.write().await;
     
     // Find the existing record
     let mut existing_record = match records_guard.get(id) {
         Some(record) => record.clone(),
         None => {
+            // Record metrics for failed operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_failure("update", "not_found", duration);
+            }
             return Err(RecordError::NotFound(format!("Record with ID '{}' not found", id)));
         }
     };
@@ -711,13 +795,27 @@ pub async fn update_record(
     }
     
     // Validate the updated record
-    existing_record.validate()?;
+    if let Err(validation_error) = existing_record.validate() {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("update", "validation_error", duration);
+        }
+        return Err(RecordError::ValidationError(validation_error));
+    }
     
     // Check for duplicate names (excluding the current record)
     for (other_id, other_record) in records_guard.iter() {
         if other_id != id 
             && other_record.name == existing_record.name 
             && other_record.record_type == existing_record.record_type {
+            // Record metrics for failed operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_failure("update", "duplicate_record", duration);
+            }
             return Err(RecordError::DuplicateRecord(format!(
                 "Record with name '{}' and type '{}' already exists", 
                 existing_record.name, 
@@ -733,10 +831,26 @@ pub async fn update_record(
     records_guard.insert(id.to_string(), existing_record.clone());
     
     // Persist to file immediately
-    save_records_to_file("dns_records.txt", &*records_guard)?;
+    if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+        // Record metrics for failed operation
+        if let Some(registry) = &metrics_registry {
+            let duration = start_time.elapsed().as_secs_f64();
+            let registry_guard = registry.read().await;
+            registry_guard.dns_metrics().record_operation_failure("update", "io_error", duration);
+        }
+        return Err(RecordError::IoError(io_error));
+    }
     
     info!("Updated record with ID {}: {}", id, existing_record.name);
     debug!("Updated record details: {:?}", existing_record);
+    
+    // Record metrics for successful operation
+    if let Some(registry) = &metrics_registry {
+        let duration = start_time.elapsed().as_secs_f64();
+        let registry_guard = registry.read().await;
+        registry_guard.dns_metrics().record_operation_success("update", duration);
+        registry_guard.dns_metrics().set_active_records_count(records_guard.len() as f64);
+    }
     
     Ok(existing_record)
 }
@@ -745,8 +859,10 @@ pub async fn update_record(
 /// Provides proper error handling for non-existent records and immediate file persistence
 pub async fn delete_record(
     records: Arc<RwLock<DnsRecords>>, 
-    id: &str
+    id: &str,
+    metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<(), RecordError> {
+    let start_time = std::time::Instant::now();
     let mut records_guard = records.write().await;
     
     // Check if the record exists before attempting to delete
@@ -758,15 +874,39 @@ pub async fn delete_record(
             records_guard.remove(id);
             
             // Persist to file immediately
-            save_records_to_file("dns_records.txt", &*records_guard)?;
+            if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+                // Record metrics for failed operation
+                if let Some(registry) = &metrics_registry {
+                    let duration = start_time.elapsed().as_secs_f64();
+                    let registry_guard = registry.read().await;
+                    registry_guard.dns_metrics().record_operation_failure("delete", "io_error", duration);
+                }
+                return Err(RecordError::IoError(io_error));
+            }
             
             info!("Deleted record with ID {}: {}", id, record_name);
             debug!("Remaining records count: {}", records_guard.len());
+            
+            // Record metrics for successful operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_success("delete", duration);
+                registry_guard.dns_metrics().set_active_records_count(records_guard.len() as f64);
+            }
             
             Ok(())
         }
         None => {
             debug!("Attempted to delete non-existent record with ID: {}", id);
+            
+            // Record metrics for failed operation
+            if let Some(registry) = &metrics_registry {
+                let duration = start_time.elapsed().as_secs_f64();
+                let registry_guard = registry.read().await;
+                registry_guard.dns_metrics().record_operation_failure("delete", "not_found", duration);
+            }
+            
             Err(RecordError::NotFound(format!("Record with ID '{}' not found", id)))
         }
     }

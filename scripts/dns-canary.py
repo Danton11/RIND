@@ -42,13 +42,19 @@ class DNSCanary:
         self.running = True
         self.created_record_ids = []  # Track records we create for cleanup
         
-        # Domains that should exist in the DNS server (based on dns_records.txt)
+        # Domains that should exist in the DNS server (based on actual dns_records.txt)
         self.existing_domains = [
-            "example.com",
-            "test.com", 
-            "google.com",
-            "amazon.com",
-            "github.com"
+            "test.example.com",
+            "canary-test-1.example.com",
+            "canary-test-2.example.com", 
+            "canary-test-3.example.com",
+            "www.canary-test.example.com",
+            "mail.canary-test.example.com",
+            "api.canary-test.example.com",
+            "db.canary-test.example.com",
+            "test-canary.example.com",
+            "minimal.example.com",
+            "minimal2.example.com"
         ]
         
         # Random domains that likely don't exist
@@ -383,11 +389,11 @@ class DNSCanary:
         while self.running:
             try:
                 # Decide whether to perform DNS query or API operation
-                # 80% DNS queries, 20% API operations
-                if enable_api_ops and random.random() < 0.2:
+                # 95% DNS queries, 5% API operations (much more DNS focused)
+                if enable_api_ops and random.random() < 0.05:
                     # Perform API operation
                     self.perform_api_operations()
-                    time.sleep(random.uniform(1, 3))  # Longer sleep after API ops
+                    time.sleep(random.uniform(0.1, 0.3))  # Much shorter sleep after API ops
                 else:
                     # Perform DNS query
                     domain, query_type = self.select_query()
@@ -399,13 +405,13 @@ class DNSCanary:
                     self.update_stats(response_code)
                     logger.debug(f"Query: {domain} {query_type} -> {response_code} ({duration:.3f}s)")
                     
-                    # Short sleep between DNS queries
-                    time.sleep(random.uniform(0.01, 0.02))
+                    # Very short sleep between DNS queries for high load
+                    time.sleep(random.uniform(0.001, 0.005))
                 
                 operation_counter += 1
                 
-                # Periodic API operations every 30-60 seconds
-                if enable_api_ops and time.time() - last_api_operation > random.uniform(30, 60):
+                # Periodic API operations every 60-120 seconds (less frequent)
+                if enable_api_ops and time.time() - last_api_operation > random.uniform(60, 120):
                     self.perform_api_operations()
                     last_api_operation = time.time()
                 
