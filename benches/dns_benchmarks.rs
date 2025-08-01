@@ -1,5 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use std::net::Ipv4Addr;
+use uuid::Uuid;
+use chrono::Utc;
 
 use rind::packet::{parse, build_response, DnsQuery, Question};
 use rind::update::{DnsRecord, DnsRecords, load_records_from_file, save_records_to_file};
@@ -92,13 +94,17 @@ fn bench_record_operations(c: &mut Criterion) {
     group.bench_function("save_records", |b| {
         let mut records = DnsRecords::new();
         for i in 0..100 {
+            let now = Utc::now();
             records.insert(format!("test{}.com", i), DnsRecord {
+                id: Uuid::new_v4().to_string(),
                 name: format!("test{}.com", i),
                 ip: Some(Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1)),
                 ttl: 300,
                 record_type: "A".to_string(),
                 class: "IN".to_string(),
                 value: None,
+                created_at: now,
+                updated_at: now,
             });
         }
         

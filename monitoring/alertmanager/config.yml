@@ -1,0 +1,144 @@
+global:
+  # SMTP configuration for email alerts
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'rind-alerts@localhost'
+  smtp_auth_username: ''
+  smtp_auth_password: ''
+  smtp_require_tls: false
+
+# Route configuration
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  routes:
+    # Critical DNS server alerts
+    - match:
+        severity: critical
+        service: dns-server
+      receiver: 'dns-critical'
+      group_wait: 5s
+      repeat_interval: 15m
+    
+    # High severity alerts
+    - match:
+        severity: high
+      receiver: 'high-severity'
+      group_wait: 30s
+      repeat_interval: 30m
+    
+    # Performance alerts
+    - match:
+        alertname: 'HighLatency'
+      receiver: 'performance-alerts'
+      group_wait: 1m
+      repeat_interval: 1h
+    
+    # Resource alerts
+    - match_re:
+        alertname: '(HighMemoryUsage|HighCPUUsage|DiskSpaceLow)'
+      receiver: 'resource-alerts'
+      group_wait: 2m
+      repeat_interval: 2h
+
+# Receivers configuration
+receivers:
+  - name: 'default-receiver'
+    webhook_configs:
+      - url: 'http://localhost:9093/webhook'
+        send_resolved: true
+        http_config:
+          basic_auth:
+            username: 'rind'
+            password: 'webhook-secret'
+        title: 'RIND DNS Server Alert'
+        text: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Instance: {{ .Labels.instance }}
+          {{ end }}
+
+  - name: 'dns-critical'
+    webhook_configs:
+      - url: 'http://localhost:9093/webhook/critical'
+        send_resolved: true
+        title: 'CRITICAL: RIND DNS Server Issue'
+        text: |
+          🚨 CRITICAL DNS SERVER ALERT 🚨
+          
+          {{ range .Alerts }}
+          Service: {{ .Labels.service }}
+          Instance: {{ .Labels.instance }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+          
+          Immediate action required!
+
+  - name: 'high-severity'
+    webhook_configs:
+      - url: 'http://localhost:9093/webhook/high'
+        send_resolved: true
+        title: 'High Severity: RIND DNS Alert'
+        text: |
+          ⚠️ HIGH SEVERITY ALERT
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Instance: {{ .Labels.instance }}
+          Severity: {{ .Labels.severity }}
+          {{ end }}
+
+  - name: 'performance-alerts'
+    webhook_configs:
+      - url: 'http://localhost:9093/webhook/performance'
+        send_resolved: true
+        title: 'Performance Alert: RIND DNS'
+        text: |
+          📊 PERFORMANCE ALERT
+          
+          {{ range .Alerts }}
+          Metric: {{ .Labels.alertname }}
+          Instance: {{ .Labels.instance }}
+          Current Value: {{ .Annotations.value }}
+          Threshold: {{ .Annotations.threshold }}
+          {{ end }}
+
+  - name: 'resource-alerts'
+    webhook_configs:
+      - url: 'http://localhost:9093/webhook/resources'
+        send_resolved: true
+        title: 'Resource Alert: RIND DNS'
+        text: |
+          💾 RESOURCE ALERT
+          
+          {{ range .Alerts }}
+          Resource: {{ .Labels.alertname }}
+          Instance: {{ .Labels.instance }}
+          Usage: {{ .Annotations.value }}
+          {{ end }}
+
+# Inhibit rules - prevent spam
+inhibit_rules:
+  # Inhibit any warning-level alerts when the same alert is critical
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+  
+  # Inhibit high severity when critical is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'high'
+    equal: ['alertname', 'instance']
+
+# Templates for custom formatting
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'

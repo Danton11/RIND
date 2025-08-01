@@ -45,12 +45,12 @@ scrape_configs:
         regex: ([^:]+)(?::\d+)?;(\d+)
         replacement: $1:$2
 
-  # Static configuration fallback for DNS servers
+  # Static configuration for DNS servers
   - job_name: 'dns-servers-static'
     static_configs:
       - targets: 
-          - 'dns-server-1:9090'
-          - 'dns-server-2:9090'
+          - 'dns-server-primary:9090'
+          - 'dns-server-secondary:9090'
     scrape_interval: 10s
     metrics_path: /metrics
     relabel_configs:
