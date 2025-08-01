@@ -74,7 +74,7 @@ start_monitoring_stack() {
     
     # Start the monitoring stack
     print_status "Starting monitoring services..."
-    docker-compose -f docker-compose.monitoring.yml up -d
+    docker-compose -f docker/docker-compose.monitoring.yml up -d
     
     # Wait for services to be ready
     print_status "Waiting for services to start..."
@@ -187,7 +187,7 @@ run_all_tests() {
 # Function to stop monitoring stack
 stop_monitoring_stack() {
     print_status "Stopping monitoring stack..."
-    docker-compose -f docker-compose.monitoring.yml down
+    docker-compose -f docker/docker-compose.monitoring.yml down
     print_status "Monitoring stack stopped"
 }
 
@@ -196,10 +196,10 @@ show_logs() {
     local service="$1"
     if [ -n "$service" ]; then
         print_status "Showing logs for $service..."
-        docker-compose -f docker-compose.monitoring.yml logs "$service"
+        docker-compose -f docker/docker-compose.monitoring.yml logs "$service"
     else
         print_status "Showing logs for all services..."
-        docker-compose -f docker-compose.monitoring.yml logs
+        docker-compose -f docker/docker-compose.monitoring.yml logs
     fi
 }
 

@@ -1,7 +1,9 @@
 services:
   # DNS Server instances for monitoring
   dns-server-1:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: dns-server-1
     ports:
       - "12312:12312/udp"  # DNS port
@@ -18,7 +20,7 @@ services:
       - RUST_LOG=info
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ./dns_records.txt:/app/dns_records.txt
+      - ../dns_records.txt:/app/dns_records.txt
     networks:
       - monitoring-network
     labels:
@@ -28,7 +30,9 @@ services:
       - "com.docker.compose.service=dns-server"
 
   dns-server-2:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: dns-server-2
     ports:
       - "12313:12312/udp"  # DNS port
@@ -45,7 +49,7 @@ services:
       - RUST_LOG=info
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ./dns_records.txt:/app/dns_records.txt
+      - ../dns_records.txt:/app/dns_records.txt
     networks:
       - monitoring-network
     labels:
@@ -68,7 +72,7 @@ services:
       - '--storage.tsdb.retention.time=15d'
       - '--web.enable-lifecycle'
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -91,8 +95,8 @@ services:
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - monitoring-network
     depends_on:
@@ -108,7 +112,7 @@ services:
       - "3100:3100"
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ../monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
     networks:
       - monitoring-network
@@ -120,7 +124,7 @@ services:
     container_name: promtail
     command: -config.file=/etc/promtail/config.yml
     volumes:
-      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ../monitoring/loki/promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:

@@ -1,16 +1,14 @@
-version: '3.8'
-
 services:
   dns-server-dev:
     build:
-      context: .
-      dockerfile: Dockerfile.dev
+      context: ..
+      dockerfile: docker/Dockerfile.dev
     container_name: rind-dns-dev
     ports:
       - "12312:12312/udp"
       - "8080:8080/tcp"
     volumes:
-      - .:/app
+      - ..:/app
       - cargo_cache:/usr/local/cargo/registry
       - target_cache:/app/target
     environment:
@@ -26,11 +24,11 @@ services:
   # Development testing environment
   test-runner-dev:
     build:
-      context: .
-      dockerfile: Dockerfile.dev
+      context: ..
+      dockerfile: docker/Dockerfile.dev
     container_name: rind-test-dev
     volumes:
-      - .:/app
+      - ..:/app
       - cargo_cache:/usr/local/cargo/registry
       - target_cache:/app/target
     working_dir: /app

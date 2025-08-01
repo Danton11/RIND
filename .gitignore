@@ -12,11 +12,16 @@
 # Log files and directories
 logs/
 *.log
-server.log
+
+# Runtime and temporary files
+tmp/
+*.tmp
+*.temp
+*.pid
+*.lock
 
 # DNS records and runtime data
 dns_records.txt
-*.txt
 *.txt.bak
 
 # Environment and configuration files
@@ -32,9 +37,3 @@ dns_records.txt
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Temporary files
-*.tmp
-*.temp
-*.pid
-*.lock

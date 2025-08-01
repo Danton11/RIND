@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   dns-server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: rind-dns-server
     ports:
       - "12312:12312/udp"  # DNS port
@@ -30,8 +28,8 @@ services:
   # Optional: DNS testing container
   dns-tester:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: rind-dns-tester
     command: ["./test_runner"]
     depends_on:
@@ -44,8 +42,8 @@ services:
   # Optional: Record management utility
   record-manager:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: rind-record-manager
     command: ["./add_records"]
     depends_on:
