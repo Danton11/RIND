@@ -40,6 +40,13 @@ class DNSCanaryMetrics:
         self.api_last_response_time = 0.0
         self.dns_server_up = 0
         self.api_server_up = 0
+        # CRUD operation counters
+        self.api_create_operations = 0
+        self.api_read_operations = 0
+        self.api_update_operations = 0
+        self.api_delete_operations = 0
+        self.api_crud_cycle_success = 0
+        self.api_crud_cycle_failed = 0
         self.lock = threading.Lock()
     
     def record_dns_query(self, success, response_time):
@@ -60,9 +67,16 @@ class DNSCanaryMetrics:
             if success:
                 self.api_requests_success += 1
                 self.api_server_up = 1
+                self.api_crud_cycle_success += 1
+                # Count individual CRUD operations in a successful cycle
+                self.api_create_operations += 1
+                self.api_read_operations += 2  # GET specific + verification GET
+                self.api_update_operations += 1
+                self.api_delete_operations += 1
             else:
                 self.api_requests_failed += 1
                 self.api_server_up = 0
+                self.api_crud_cycle_failed += 1
             self.api_response_time_sum += response_time
             self.api_last_response_time = response_time
     
@@ -89,7 +103,13 @@ class DNSCanaryMetrics:
                 'canary_api_response_time_seconds': self.api_last_response_time,
                 'canary_api_response_time_avg_seconds': api_avg_response_time,
                 'canary_api_success_rate_percent': api_success_rate,
-                'canary_api_server_up': self.api_server_up
+                'canary_api_server_up': self.api_server_up,
+                'canary_api_crud_cycles_success_total': self.api_crud_cycle_success,
+                'canary_api_crud_cycles_failed_total': self.api_crud_cycle_failed,
+                'canary_api_create_operations_total': self.api_create_operations,
+                'canary_api_read_operations_total': self.api_read_operations,
+                'canary_api_update_operations_total': self.api_update_operations,
+                'canary_api_delete_operations_total': self.api_delete_operations
             }
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -111,6 +131,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             output = []
             output.append('# HELP canary_metrics DNS Canary monitoring metrics')
             output.append('# TYPE canary_metrics gauge')
+            output.append('# API tests include full CRUD cycle: CREATE, READ, UPDATE, DELETE operations')
             
             for metric_name, value in metrics_data.items():
                 output.append(f'{metric_name} {value}')
@@ -212,22 +233,89 @@ class DNSCanary:
             return False, response_time
     
     def test_api_request(self):
-        """Test an API request"""
+        """Test comprehensive API CRUD operations"""
         try:
             start_time = time.time()
-            url = f"http://{self.api_server}:{self.api_port}/records"
             
-            response = requests.get(url, timeout=5)
+            # Test 1: List records (GET /records)
+            list_url = f"http://{self.api_server}:{self.api_port}/records"
+            list_response = requests.get(list_url, timeout=5)
+            if list_response.status_code != 200:
+                logger.warning(f"List records failed: {list_response.status_code}")
+                return False, time.time() - start_time
+            
+            # Test 2: Create a test record (POST /records)
+            test_record_name = f"canary-test-{int(time.time())}.example.com"
+            create_payload = {
+                "name": test_record_name,
+                "ip": "192.168.1.100",
+                "ttl": 300,
+                "record_type": "A",
+                "class": "IN"
+            }
+            
+            create_response = requests.post(
+                list_url, 
+                json=create_payload, 
+                timeout=5,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            if create_response.status_code != 201:
+                logger.warning(f"Create record failed: {create_response.status_code}")
+                return False, time.time() - start_time
+            
+            # Extract the created record ID from response
+            created_record = create_response.json()
+            if not created_record.get('success') or not created_record.get('data'):
+                logger.warning("Create record response missing data")
+                return False, time.time() - start_time
+            
+            record_id = created_record['data']['id']
+            
+            # Test 3: Get specific record (GET /records/{id})
+            get_url = f"http://{self.api_server}:{self.api_port}/records/{record_id}"
+            get_response = requests.get(get_url, timeout=5)
+            if get_response.status_code != 200:
+                logger.warning(f"Get record failed: {get_response.status_code}")
+                return False, time.time() - start_time
+            
+            # Test 4: Update record (PUT /records/{id})
+            update_payload = {
+                "ip": "192.168.1.101",
+                "ttl": 600
+            }
+            
+            update_response = requests.put(
+                get_url,
+                json=update_payload,
+                timeout=5,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            if update_response.status_code != 200:
+                logger.warning(f"Update record failed: {update_response.status_code}")
+                return False, time.time() - start_time
+            
+            # Test 5: Delete record (DELETE /records/{id})
+            delete_response = requests.delete(get_url, timeout=5)
+            if delete_response.status_code not in [200, 204]:
+                logger.warning(f"Delete record failed: {delete_response.status_code}")
+                return False, time.time() - start_time
+            
+            # Test 6: Verify deletion (GET /records/{id} should return 404)
+            verify_response = requests.get(get_url, timeout=5)
+            if verify_response.status_code != 404:
+                logger.warning(f"Record deletion verification failed: {verify_response.status_code}")
+                return False, time.time() - start_time
+            
             response_time = time.time() - start_time
-            
-            if response.status_code == 200:
-                return True, response_time
-            else:
-                return False, response_time
+            logger.debug(f"Full API CRUD test completed successfully in {response_time:.3f}s")
+            return True, response_time
                 
         except Exception as e:
             response_time = time.time() - start_time
-            logger.debug(f"API request failed: {e}")
+            logger.debug(f"API CRUD test failed: {e}")
             return False, response_time
     
     def monitoring_loop(self):
@@ -246,21 +334,21 @@ class DNSCanary:
                     else:
                         logger.warning(f"DNS query failed for {domain}: {response_time:.3f}s")
                 
-                # Test API request
+                # Test API CRUD operations
                 success, response_time = self.test_api_request()
                 self.metrics.record_api_request(success, response_time)
                 
                 if success:
-                    logger.debug(f"API request: {response_time:.3f}s")
+                    logger.debug(f"API CRUD cycle completed: {response_time:.3f}s")
                 else:
-                    logger.warning(f"API request failed: {response_time:.3f}s")
+                    logger.warning(f"API CRUD cycle failed: {response_time:.3f}s")
                 
                 # Wait before next test cycle
-                time.sleep(10)
+                time.sleep(0.001)
                 
             except Exception as e:
                 logger.error(f"Error in monitoring loop: {e}")
-                time.sleep(5)
+                time.sleep(1)
     
     def start_metrics_server(self):
         """Start the metrics HTTP server"""

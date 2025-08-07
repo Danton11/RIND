@@ -12,7 +12,11 @@ mod query;
 mod update;
 mod metrics;
 
-const DNS_RECORDS_FILE: &str = "dns_records.txt";
+// Get data directory from environment or use current directory as fallback
+fn get_dns_records_file() -> String {
+    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| ".".to_string());
+    format!("{}/dns_records.txt", data_dir)
+}
 
 // Helper function to record API metrics
 async fn record_api_metrics(
@@ -413,14 +417,17 @@ async fn main() {
         }
     };
 
+    // Get DNS records file path
+    let dns_records_file = get_dns_records_file();
+    
     // Ensure datastore is initialized before loading records
-    if let Err(e) = update::ensure_datastore_initialized(DNS_RECORDS_FILE) {
+    if let Err(e) = update::ensure_datastore_initialized(&dns_records_file) {
         error!("Failed to initialize datastore: {}", e);
         std::process::exit(1);
     }
     
     // Load DNS records and create shared references
-    let records = update::load_records(DNS_RECORDS_FILE);
+    let records = update::load_records(&dns_records_file);
     let records_for_filter = Arc::clone(&records);
     let records_for_server = Arc::clone(&records);
 

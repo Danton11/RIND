@@ -44,8 +44,11 @@ COPY --from=builder /app/target/release/rind ./rind
 COPY --from=builder /app/target/release/add_records ./add_records
 COPY --from=builder /app/target/release/test_runner ./test_runner
 
-# Copy DNS records file
-COPY dns_records.txt ./dns_records.txt
+# Create data directory for DNS records
+RUN mkdir -p /app/data
+
+# Copy DNS records file to data directory if it exists
+# This will be created by the application if it doesn't exist
 
 # Change ownership to app user
 RUN chown -R appuser:appuser /app

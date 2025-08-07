@@ -24,8 +24,8 @@ services:
       - LOG_LEVEL=info
       - LOG_FORMAT=json
       - DISABLE_FILE_LOGGING=true
+      - DATA_DIR=/app/data
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt
       - dns_data_primary:/app/data
     networks:
       - rind-network
@@ -70,8 +70,8 @@ services:
       - LOG_LEVEL=info
       - LOG_FORMAT=json
       - DISABLE_FILE_LOGGING=true
+      - DATA_DIR=/app/data
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt
       - dns_data_secondary:/app/data
     networks:
       - rind-network
@@ -378,7 +378,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ../dns_records.txt:/app/dns_records.txt:ro
+      - dns_data_primary:/app/data:ro
     networks:
       - rind-network
     depends_on:
@@ -475,8 +475,9 @@ services:
       - RUST_LOG=info
       - API_TARGET_HOST=dns-server-primary
       - API_TARGET_PORT=8080
+      - DATA_DIR=/app/data
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt
+      - dns_data_primary:/app/data
     networks:
       - rind-network
     depends_on:

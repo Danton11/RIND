@@ -9,6 +9,13 @@ use log::{info, debug, error};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
+/// Get the DNS records file path from environment or use default
+fn get_dns_records_file_path() -> String {
+    std::env::var("DATA_DIR")
+        .map(|dir| format!("{}/dns_records.txt", dir))
+        .unwrap_or_else(|_| "dns_records.txt".to_string())
+}
+
 /// Trait for datastore operations - allows easy switching between file and database storage
 #[async_trait::async_trait]
 pub trait DatastoreProvider: Send + Sync {
@@ -567,7 +574,7 @@ pub async fn create_record(
     records_guard.insert(record_id.clone(), new_record.clone());
     
     // Persist to file immediately
-    if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
         // Record metrics for failed operation
         if let Some(registry) = &metrics_registry {
             let duration = start_time.elapsed().as_secs_f64();
@@ -831,7 +838,7 @@ pub async fn update_record(
     records_guard.insert(id.to_string(), existing_record.clone());
     
     // Persist to file immediately
-    if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
         // Record metrics for failed operation
         if let Some(registry) = &metrics_registry {
             let duration = start_time.elapsed().as_secs_f64();
@@ -874,7 +881,7 @@ pub async fn delete_record(
             records_guard.remove(id);
             
             // Persist to file immediately
-            if let Err(io_error) = save_records_to_file("dns_records.txt", &*records_guard) {
+            if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
                 // Record metrics for failed operation
                 if let Some(registry) = &metrics_registry {
                     let duration = start_time.elapsed().as_secs_f64();
@@ -929,7 +936,7 @@ pub async fn update_record_legacy(records: Arc<RwLock<DnsRecords>>, mut new_reco
     info!("Updating record: {:?}", new_record);
     records_guard.insert(new_record.id.clone(), new_record);
     debug!("Current records: {:?}", *records_guard);
-    if let Err(e) = save_records_to_file("dns_records.txt", &*records_guard) {
+    if let Err(e) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
         error!("Failed to save DNS records: {}", e);
     }
 }

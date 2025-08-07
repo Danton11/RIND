@@ -171,7 +171,7 @@ class SystemMetrics:
         
         # DNS records file metrics if available
         try:
-            dns_records_file = '/app/dns_records.txt'
+            dns_records_file = '/app/data/dns_records.txt'
             if os.path.exists(dns_records_file):
                 stat = os.stat(dns_records_file)
                 metrics.append(f'rind_dns_records_file_size_bytes {stat.st_size}')
