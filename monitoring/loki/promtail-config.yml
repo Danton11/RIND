@@ -48,3 +48,77 @@ scrape_configs:
           format: RFC3339Nano
       - output:
           source: message
+
+  # Local RIND server log files (for development/local runs)
+  - job_name: rind-local-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rind-local
+          service: dns-server
+          environment: local
+          __path__: /var/log/rind/rind_*.log
+    pipeline_stages:
+      # Handle both JSON and text format logs
+      - match:
+          selector: '{job="rind-local"}'
+          stages:
+            # Try to parse as JSON first (for structured logs)
+            - json:
+                expressions:
+                  timestamp: timestamp
+                  level: level
+                  message: message
+                  target: target
+                  filename: filename
+                  line_number: line_number
+                  threadId: threadId
+                  fields: fields
+            # If JSON parsing fails, treat as plain text
+            - match:
+                selector: '{level=""}'
+                stages:
+                  - regex:
+                      expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+(?P<level>\w+)\s+(?P<target>[\w:]+):\s*(?P<message>.*)$'
+                  - labels:
+                      level:
+                      target:
+                  - timestamp:
+                      source: timestamp
+                      format: RFC3339Nano
+                  - output:
+                      source: message
+            # For JSON logs, set labels and output
+            - match:
+                selector: '{level!=""}'
+                stages:
+                  - labels:
+                      level:
+                      target:
+                  - timestamp:
+                      source: timestamp
+                      format: RFC3339Nano
+                  - output:
+                      source: message
+
+  # Canary script logs
+  - job_name: rind-canary-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rind-canary
+          service: canary
+          environment: local
+          __path__: /var/log/rind/dns-canary-*.log
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+-\s+(?P<level>\w+)\s+-\s+(?P<message>.*)$'
+      - labels:
+          level:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05,000'
+      - output:
+          source: message
