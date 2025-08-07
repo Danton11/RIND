@@ -298,18 +298,7 @@ async fn create_record_handler(
     result
 }
 
-fn setup_file_logging() -> Result<(), Box<dyn std::error::Error>> {
-    // Create logs directory if it doesn't exist
-    fs::create_dir_all("logs")?;
-    
-    // Generate timestamp for log filename
-    let now: DateTime<Utc> = Utc::now();
-    let timestamp = now.format("%Y-%m-%d_%H");
-    let log_filename = format!("logs/rind_{}.log", timestamp);
-    
-    // Create file appender
-    let file_appender = tracing_appender::rolling::never("logs", format!("rind_{}.log", timestamp));
-    
+fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
     // Set up log level from environment variable
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -318,39 +307,85 @@ fn setup_file_logging() -> Result<(), Box<dyn std::error::Error>> {
     // Determine log format from environment variable
     let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
     
-    if log_format == "json" {
-        // JSON format for production
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt::layer()
-                .json()
-                .with_writer(file_appender)
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_file(true)
-                .with_line_number(true))
-            .init();
+    // Check if file logging is disabled (for Docker/container environments)
+    let disable_file_logging = std::env::var("DISABLE_FILE_LOGGING")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
+    
+    if disable_file_logging {
+        // Output to stdout for Docker log collection
+        if log_format == "json" {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt::layer()
+                    .json()
+                    .with_writer(std::io::stdout)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(true)
+                    .with_line_number(true))
+                .init();
+        } else {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt::layer()
+                    .with_writer(std::io::stdout)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_ansi(true))
+                .init();
+        }
+        println!("Logging initialized - writing to stdout");
     } else {
-        // Human-readable format for development
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt::layer()
-                .with_writer(file_appender)
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_file(true)
-                .with_line_number(true)
-                .with_ansi(false)) // Disable colors for file output
-            .init();
+        // Create logs directory if it doesn't exist
+        fs::create_dir_all("logs")?;
+        
+        // Generate timestamp for log filename
+        let now: DateTime<Utc> = Utc::now();
+        let timestamp = now.format("%Y-%m-%d_%H");
+        let log_filename = format!("logs/rind_{}.log", timestamp);
+        
+        // Create file appender
+        let file_appender = tracing_appender::rolling::never("logs", format!("rind_{}.log", timestamp));
+        
+        if log_format == "json" {
+            // JSON format for production
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt::layer()
+                    .json()
+                    .with_writer(file_appender)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(true)
+                    .with_line_number(true))
+                .init();
+        } else {
+            // Human-readable format for development
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(fmt::layer()
+                    .with_writer(file_appender)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_ansi(false)) // Disable colors for file output
+                .init();
+        }
+        
+        println!("Logging initialized - writing to: {}", log_filename);
     }
     
-    println!("Logging initialized - writing to: {}", log_filename);
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = setup_file_logging() {
+    if let Err(e) = setup_logging() {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
     }

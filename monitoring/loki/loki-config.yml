@@ -12,7 +12,6 @@ common:
       rules_directory: /loki/rules
   replication_factor: 1
   ring:
-    instance_addr: 127.0.0.1
     kvstore:
       store: inmemory
 
@@ -48,6 +47,19 @@ ruler:
 # If you would like to disable reporting, uncomment the following lines:
 analytics:
   reporting_enabled: false
+
+ingester:
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+  chunk_idle_period: 1h
+  max_chunk_age: 1h
+  chunk_target_size: 1048576
+  chunk_retain_period: 30s
 
 limits_config:
   retention_period: 168h  # 7 days
