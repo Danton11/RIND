@@ -80,7 +80,9 @@ pub struct DnsQuery {
     pub id: u16,
     pub flags: u16,
     pub questions: Vec<Question>,
-    pub has_opt: bool,         // Indicates if the query had an OPT record
+    #[allow(dead_code)]
+    pub has_opt: bool, // Indicates if the query had an OPT record
+    #[allow(dead_code)]
     pub opt_payload_size: u16, // The UDP payload size from the OPT record
 }
 

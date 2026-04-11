@@ -1,7 +1,5 @@
-use reqwest;
 use serde_json::json;
 use std::error::Error;
-use tokio;
 
 fn get_api_url() -> String {
     let api_addr =
@@ -40,7 +38,7 @@ async fn add_record(client: &reqwest::Client, record: &DnsRecord) -> Result<(), 
         "value": null
     });
 
-    let response = client.post(&get_api_url()).json(&payload).send().await?;
+    let response = client.post(get_api_url()).json(&payload).send().await?;
 
     if response.status().is_success() {
         println!(

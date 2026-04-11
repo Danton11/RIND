@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Handles DNS query and returns response packet
+#[allow(dead_code)]
 pub async fn handle_query(
     query: DnsQuery,
     records: Arc<RwLock<HashMap<String, crate::update::DnsRecord>>>,

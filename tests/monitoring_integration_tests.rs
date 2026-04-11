@@ -113,7 +113,7 @@ async fn add_dns_record_to_server(
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "http://127.0.0.1:{}/update",
             server_config.api_port
         ))
@@ -136,7 +136,7 @@ async fn check_monitoring_stack_health(
 
     // Check Prometheus
     let prometheus_response = client
-        .get(&format!("{}/api/v1/status/config", config.prometheus_url))
+        .get(format!("{}/api/v1/status/config", config.prometheus_url))
         .timeout(Duration::from_secs(10))
         .send()
         .await?;
@@ -147,7 +147,7 @@ async fn check_monitoring_stack_health(
 
     // Check Grafana
     let grafana_response = client
-        .get(&format!("{}/api/health", config.grafana_url))
+        .get(format!("{}/api/health", config.grafana_url))
         .timeout(Duration::from_secs(10))
         .send()
         .await?;
@@ -158,7 +158,7 @@ async fn check_monitoring_stack_health(
 
     // Check Loki
     let loki_response = client
-        .get(&format!("{}/ready", config.loki_url))
+        .get(format!("{}/ready", config.loki_url))
         .timeout(Duration::from_secs(10))
         .send()
         .await?;
@@ -280,7 +280,7 @@ async fn test_prometheus_scraping() {
 
     // Check targets are discovered
     let targets_response = client
-        .get(&format!("{}/api/v1/targets", config.prometheus_url))
+        .get(format!("{}/api/v1/targets", config.prometheus_url))
         .send()
         .await
         .expect("Failed to get Prometheus targets");
@@ -322,7 +322,7 @@ async fn test_prometheus_scraping() {
     // Test querying metrics from Prometheus
     let query = "dns_queries_total";
     let query_response = client
-        .get(&format!("{}/api/v1/query", config.prometheus_url))
+        .get(format!("{}/api/v1/query", config.prometheus_url))
         .query(&[("query", query)])
         .send()
         .await
@@ -503,7 +503,7 @@ async fn test_grafana_dashboard_functionality() {
     // Check if Grafana is accessible
     let client = Client::new();
     let health_response = client
-        .get(&format!("{}/api/health", config.grafana_url))
+        .get(format!("{}/api/health", config.grafana_url))
         .send()
         .await;
 
@@ -514,7 +514,7 @@ async fn test_grafana_dashboard_functionality() {
 
     // Test dashboard API access
     let dashboards_response = client
-        .get(&format!("{}/api/search?type=dash-db", config.grafana_url))
+        .get(format!("{}/api/search?type=dash-db", config.grafana_url))
         .basic_auth("admin", Some("admin"))
         .send()
         .await;
@@ -573,7 +573,7 @@ async fn test_log_aggregation() {
     // Check if Loki is accessible
     let client = Client::new();
     let ready_response = client
-        .get(&format!("{}/ready", config.loki_url))
+        .get(format!("{}/ready", config.loki_url))
         .send()
         .await;
 
@@ -618,7 +618,7 @@ async fn test_log_aggregation() {
     ];
 
     match client
-        .get(&format!("{}/loki/api/v1/query_range", config.loki_url))
+        .get(format!("{}/loki/api/v1/query_range", config.loki_url))
         .query(&query_params)
         .send()
         .await
@@ -690,7 +690,7 @@ async fn test_service_discovery() {
     // Check if Prometheus is running
     let client = Client::new();
     let config_response = client
-        .get(&format!("{}/api/v1/status/config", config.prometheus_url))
+        .get(format!("{}/api/v1/status/config", config.prometheus_url))
         .send()
         .await;
 
@@ -701,7 +701,7 @@ async fn test_service_discovery() {
 
     // Get service discovery targets
     let targets_response = client
-        .get(&format!("{}/api/v1/targets", config.prometheus_url))
+        .get(format!("{}/api/v1/targets", config.prometheus_url))
         .send()
         .await;
 
@@ -825,7 +825,10 @@ async fn test_full_monitoring_stack_integration() {
                 let domain = format!("{}-{}.com", base_domain, j);
                 let ip = format!("203.0.113.{}", 150 + j);
 
-                if let Ok(_) = add_dns_record_to_server(&domain, &ip, &server).await {
+                if add_dns_record_to_server(&domain, &ip, &server)
+                    .await
+                    .is_ok()
+                {
                     sleep(Duration::from_millis(50)).await;
 
                     // Generate queries with different patterns
@@ -883,7 +886,7 @@ async fn test_full_monitoring_stack_integration() {
     // Check Prometheus has scraped the metrics
     let client = Client::new();
     if let Ok(response) = client
-        .get(&format!("{}/api/v1/query", config.prometheus_url))
+        .get(format!("{}/api/v1/query", config.prometheus_url))
         .query(&[("query", "dns_queries_total")])
         .send()
         .await

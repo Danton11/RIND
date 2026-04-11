@@ -75,7 +75,7 @@ async fn add_dns_record_via_api(
     });
 
     let response = client
-        .post(&format!("http://{}/records", get_api_server_addr()))
+        .post(format!("http://{}/records", get_api_server_addr()))
         .json(&record)
         .send()
         .await?;
@@ -88,6 +88,7 @@ async fn add_dns_record_via_api(
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_end_to_end_record_addition() {
     // Test adding a record via API and immediately querying it
     let domain = generate_unique_domain("end-to-end");
@@ -136,6 +137,7 @@ async fn test_end_to_end_record_addition() {
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_concurrent_queries() {
     let domain = generate_unique_domain("concurrent");
     let ip = "203.0.113.100";
@@ -186,6 +188,7 @@ async fn test_concurrent_queries() {
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_malformed_packets() {
     let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
     socket
@@ -196,7 +199,7 @@ async fn test_malformed_packets() {
         .parse()
         .expect("Invalid server address");
 
-    let malformed_packets = vec![
+    let malformed_packets = [
         vec![],         // Empty packet
         vec![0x00; 5],  // Too short
         vec![0xFF; 12], // Invalid header
@@ -223,6 +226,7 @@ async fn test_malformed_packets() {
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_record_update_performance() {
     let domain = generate_unique_domain("update");
     let initial_ip = "203.0.113.1";
@@ -268,6 +272,7 @@ async fn test_record_update_performance() {
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_extreme_domain_names() {
     let test_patterns = vec![
         ("short", "a"),                                   // Short domain
@@ -285,13 +290,13 @@ async fn test_extreme_domain_names() {
         let ip = "203.0.113.123";
         add_dns_record_via_api(&domain, ip)
             .await
-            .expect(&format!("Failed to add record for {}", domain));
+            .unwrap_or_else(|_| panic!("Failed to add record for {}", domain));
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Query record
         let response = send_dns_query(&domain)
             .await
-            .expect(&format!("Failed to query {}", domain));
+            .unwrap_or_else(|_| panic!("Failed to query {}", domain));
 
         // Verify response
         assert!(response.len() > 12, "Response too short for {}", domain);
@@ -302,6 +307,7 @@ async fn test_extreme_domain_names() {
 }
 
 #[tokio::test]
+#[ignore] // requires running server
 async fn test_sustained_load() {
     let domain = generate_unique_domain("load");
     let ip = "203.0.113.200";

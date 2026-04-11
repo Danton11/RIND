@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Configuration for logging setup
+#[allow(dead_code)]
 pub struct LogConfig {
     pub level: String,
     pub format: LogFormat,
@@ -17,6 +18,7 @@ pub struct LogConfig {
 
 /// Log output format options
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LogFormat {
     Json,
     Text,
@@ -31,6 +33,7 @@ impl Default for LogConfig {
     }
 }
 
+#[allow(dead_code)]
 impl LogConfig {
     /// Create log config from environment variables
     pub fn from_env() -> Self {

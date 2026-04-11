@@ -1,4 +1,3 @@
-use serde_json::json;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -134,7 +133,7 @@ async fn test_post_record_success_with_all_fields() {
     assert_eq!(created_record.ttl, 600);
     assert_eq!(created_record.record_type, "A");
     assert_eq!(created_record.class, "IN");
-    assert!(created_record.id.len() > 0); // Should have generated UUID
+    assert!(!created_record.id.is_empty()); // Should have generated UUID
 
     // Verify record was actually stored
     let records = records_arc.read().await;

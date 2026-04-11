@@ -18,6 +18,7 @@ fn get_dns_records_file_path() -> String {
 
 /// Trait for datastore operations - allows easy switching between file and database storage
 #[async_trait::async_trait]
+#[allow(dead_code)]
 pub trait DatastoreProvider: Send + Sync {
     /// Initialize the datastore (create file, connect to DB, etc.)
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -86,6 +87,7 @@ pub enum RecordError {
     #[error("IO error: {0}")]
     IoError(#[from] IoError),
     #[error("Serialization error: {0}")]
+    #[allow(dead_code)]
     SerializationError(String),
 }
 
@@ -247,6 +249,7 @@ impl DnsRecord {
     }
 
     /// Check if this record has the same content as another (ignoring timestamps and ID)
+    #[allow(dead_code)]
     pub fn has_same_content(&self, other: &DnsRecord) -> bool {
         self.name == other.name
             && self.ip == other.ip
@@ -519,10 +522,12 @@ pub fn validate_datastore_format(file_path: &str) -> Result<bool, IoError> {
 }
 
 /// File-based datastore provider implementation
+#[allow(dead_code)]
 pub struct FileDatastoreProvider {
     file_path: String,
 }
 
+#[allow(dead_code)]
 impl FileDatastoreProvider {
     pub fn new(file_path: String) -> Self {
         Self { file_path }
@@ -584,6 +589,7 @@ pub fn ensure_datastore_initialized(
 
 /// Create a datastore provider based on configuration
 /// In the future, this can be extended to return database providers
+#[allow(dead_code)]
 pub fn create_datastore_provider(file_path: &str) -> Box<dyn DatastoreProvider> {
     // For now, always return file provider
     // In the future, this could check environment variables or config to determine provider type
@@ -592,6 +598,7 @@ pub fn create_datastore_provider(file_path: &str) -> Box<dyn DatastoreProvider> 
 
 /// Create a new DNS record with UUID generation and validation
 /// Validates for duplicate names and invalid data, then persists immediately
+#[allow(clippy::too_many_arguments)]
 pub async fn create_record(
     records: Arc<RwLock<DnsRecords>>,
     name: String,
@@ -653,7 +660,7 @@ pub async fn create_record(
     records_guard.insert(record_id.clone(), new_record.clone());
 
     // Persist to file immediately
-    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
+    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &records_guard) {
         // Record metrics for failed operation
         if let Some(registry) = &metrics_registry {
             let duration = start_time.elapsed().as_secs_f64();
@@ -963,7 +970,7 @@ pub async fn update_record(
     records_guard.insert(id.to_string(), existing_record.clone());
 
     // Persist to file immediately
-    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
+    if let Err(io_error) = save_records_to_file(&get_dns_records_file_path(), &records_guard) {
         // Record metrics for failed operation
         if let Some(registry) = &metrics_registry {
             let duration = start_time.elapsed().as_secs_f64();
@@ -1013,7 +1020,7 @@ pub async fn delete_record(
 
             // Persist to file immediately
             if let Err(io_error) =
-                save_records_to_file(&get_dns_records_file_path(), &*records_guard)
+                save_records_to_file(&get_dns_records_file_path(), &records_guard)
             {
                 // Record metrics for failed operation
                 if let Some(registry) = &metrics_registry {
@@ -1082,7 +1089,7 @@ pub async fn update_record_legacy(records: Arc<RwLock<DnsRecords>>, mut new_reco
     info!("Updating record: {:?}", new_record);
     records_guard.insert(new_record.id.clone(), new_record);
     debug!("Current records: {:?}", *records_guard);
-    if let Err(e) = save_records_to_file(&get_dns_records_file_path(), &*records_guard) {
+    if let Err(e) = save_records_to_file(&get_dns_records_file_path(), &records_guard) {
         error!("Failed to save DNS records: {}", e);
     }
 }
