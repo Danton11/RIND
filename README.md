@@ -84,7 +84,7 @@ CI runs `fmt --check`, `clippy`, and `test` on every push/PR via GitHub Actions.
 
 The full stack includes Prometheus, Grafana, Loki, and AlertManager. After starting:
 
-- **Grafana**: http://localhost:3000 (admin/rind-admin-2025)
+- **Grafana**: http://localhost:3000 (credentials in `.env`, see `.env.example`)
 - **Prometheus**: http://localhost:9090
 - **HAProxy Stats**: http://localhost:8404/stats
 

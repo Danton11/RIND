@@ -70,7 +70,7 @@ EXAMPLES:
     $0 benchmark                   # Run performance benchmarks
 
 MONITORING URLS:
-    Grafana:        http://localhost:3000 (admin/rind-admin-204)
+    Grafana:        http://localhost:3000 (see .env for credentials)
     Prometheus:     http://localhost:9090
     AlertManager:   http://localhost:9093
     HAProxy Stats:  http://localhost:8404/stats
@@ -366,7 +366,7 @@ scale_servers() {
 show_urls() {
     echo
     log "Access URLs:"
-    echo -e "  ${BLUE}Grafana Dashboards:${NC}   http://localhost:3000 (admin/rind-admin-2025)"
+    echo -e "  ${BLUE}Grafana Dashboards:${NC}   http://localhost:3000 (see .env for credentials)"
     echo -e "  ${BLUE}Prometheus Metrics:${NC}   http://localhost:9090"
     echo -e "  ${BLUE}AlertManager:${NC}         http://localhost:9093"
     echo -e "  ${BLUE}HAProxy Stats:${NC}        http://localhost:8404/stats"

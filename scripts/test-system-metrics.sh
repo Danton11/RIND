@@ -184,7 +184,7 @@ test_dashboard() {
     log_info "Testing system metrics dashboard..."
     
     local response
-    if response=$(curl -s -u admin:rind-admin-2025 "$dashboard_url" 2>/dev/null); then
+    if response=$(curl -s -u "${GRAFANA_ADMIN_USER:-admin}:${GRAFANA_ADMIN_PASSWORD:-changeme}" "$dashboard_url" 2>/dev/null); then
         if echo "$response" | jq -e '.dashboard.title' >/dev/null 2>&1; then
             local title
             title=$(echo "$response" | jq -r '.dashboard.title')

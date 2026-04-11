@@ -61,7 +61,7 @@ curl http://127.0.0.1:9090/metrics
 
 ## Grafana Dashboards
 
-Access Grafana at http://localhost:3000 (admin/rind-admin-2025).
+Access Grafana at http://localhost:3000 (credentials in `.env`).
 
 ### Available Dashboards
 

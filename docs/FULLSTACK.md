@@ -14,7 +14,7 @@ Services available after startup:
 |---------|-----|
 | DNS (via HAProxy) | `dig @localhost -p 53 example.com` |
 | API (via HAProxy) | http://localhost:80/records |
-| Grafana | http://localhost:3000 (admin/rind-admin-2025) |
+| Grafana | http://localhost:3000 (credentials in `.env`) |
 | Prometheus | http://localhost:9090 |
 | HAProxy Stats | http://localhost:8404/stats |
 | Loki | http://localhost:3100 |
@@ -126,6 +126,6 @@ curl http://localhost:8404/stats     # check backend health
 **Monitoring issues:**
 ```bash
 curl http://localhost:9090/api/v1/targets           # Prometheus targets
-curl http://admin:rind-admin-2025@localhost:3000/api/datasources  # Grafana
+curl http://admin:$GRAFANA_ADMIN_PASSWORD@localhost:3000/api/datasources  # Grafana
 curl http://localhost:3100/ready                     # Loki
 ```
