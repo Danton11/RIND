@@ -318,6 +318,26 @@ class DNSCanary:
             logger.debug(f"API CRUD test failed: {e}")
             return False, response_time
     
+    def seed_test_records(self):
+        """Seed DNS records for canary test domains so queries return NOERROR"""
+        seed_records = [
+            {"name": "example.com", "ip": "93.184.216.34", "ttl": 300, "record_type": "A", "class": "IN"},
+            {"name": "google.com", "ip": "142.250.80.46", "ttl": 300, "record_type": "A", "class": "IN"},
+            {"name": "cloudflare.com", "ip": "104.16.132.229", "ttl": 300, "record_type": "A", "class": "IN"},
+        ]
+        url = f"http://{self.api_server}:{self.api_port}/records"
+        for record in seed_records:
+            try:
+                resp = requests.post(url, json=record, timeout=5, headers={'Content-Type': 'application/json'})
+                if resp.status_code == 201:
+                    logger.info(f"Seeded record: {record['name']} -> {record['ip']}")
+                elif resp.status_code == 409:
+                    logger.info(f"Record already exists: {record['name']}")
+                else:
+                    logger.warning(f"Failed to seed {record['name']}: {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"Failed to seed {record['name']}: {e}")
+
     def monitoring_loop(self):
         """Main monitoring loop"""
         logger.info("Starting DNS canary monitoring loop")
@@ -376,6 +396,9 @@ class DNSCanary:
         logger.info(f"API Server: {self.api_server}:{self.api_port}")
         logger.info(f"Metrics Port: {self.metrics_port}")
         
+        # Seed test records so DNS queries return NOERROR
+        self.seed_test_records()
+
         # Start metrics server
         metrics_server = self.start_metrics_server()
         
