@@ -88,6 +88,16 @@ The full stack includes Prometheus, Grafana, Loki, and AlertManager. After start
 - **Prometheus**: http://localhost:9090
 - **HAProxy Stats**: http://localhost:8404/stats
 
+### Dashboards
+
+| Dashboard | Screenshot |
+|-----------|------------|
+| DNS Server Overview | ![DNS Overview](docs/screenshots/dns-overview.png) |
+| DNS Protocol Analysis | ![DNS Protocol](docs/screenshots/dns-protocol.png) |
+| Record Management | ![Record Management](docs/screenshots/rind-record-management.png) |
+| System Metrics | ![System Metrics](docs/screenshots/rind-system-metrics.png) |
+| Error Analysis | ![Errors](docs/screenshots/dns-errors.png) |
+
 See [docs/METRICS.md](docs/METRICS.md) for available metrics and PromQL queries.
 
 ## Documentation
