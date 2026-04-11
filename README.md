@@ -1,131 +1,103 @@
-# RIND DNS Server
+# RIND
 
-A high-performance DNS server written in Rust with real-time record management and monitoring capabilities.
+A DNS server written in Rust with a REST API for record management, designed to run as a primary/secondary pair behind HAProxy with full observability via Prometheus, Grafana, and Loki.
 
-## ✨ Features
+## Architecture
 
-- 🚀 **High Performance**: 18,000+ QPS sustained throughput
-- ⚡ **Real-time Updates**: 12ms end-to-end API to DNS resolution
-- 🛡️ **Robust**: Handles malformed packets and edge cases gracefully  
-- 📊 **Production Ready**: Full test suite with monitoring and alerting
-- 🎯 **Protocol Compliant**: Full DNS protocol implementation
-- 📈 **Metrics & Monitoring**: Prometheus-compatible metrics with Grafana dashboards
+```mermaid
+graph TD
+    Client[Clients]
+    HAProxy[HAProxy<br/>DNS: port 53 UDP<br/>API: port 80 HTTP]
+    Primary[DNS Server Primary<br/>DNS: 12312, API: 8080]
+    Secondary[DNS Server Secondary<br/>DNS: 12313, API: 8081]
+    Prometheus[Prometheus<br/>port 9090]
+    Grafana[Grafana<br/>port 3000]
+    Loki[Loki<br/>port 3100]
+    AlertManager[AlertManager<br/>port 9093]
 
-## 🚀 Quick Start
+    Client --> HAProxy
+    HAProxy --> Primary
+    HAProxy --> Secondary
+    Primary -->|metrics| Prometheus
+    Secondary -->|metrics| Prometheus
+    Primary -->|logs| Loki
+    Secondary -->|logs| Loki
+    Prometheus --> Grafana
+    Loki --> Grafana
+    Prometheus --> AlertManager
+```
 
-### Prerequisites
-- Docker and Docker Compose
-- Python 3.9+ (for canary monitoring)
+Each DNS server instance runs three listeners:
+- **UDP** — DNS protocol (port 12312)
+- **HTTP** — REST API for record CRUD (port 8080)
+- **HTTP** — Prometheus metrics (port 9090)
 
-### Start Complete Stack
+Records are stored in a flat file (`dns_records.txt`), with plans to migrate to LMDB.
+
+## Quick Start
+
 ```bash
-# Start DNS servers with full monitoring stack
+# Full stack with monitoring
 ./scripts/start-fullstack.sh start
 
-# Access monitoring dashboards
-# Grafana: http://localhost:3000 (admin/rind-admin-2025)
-# Prometheus: http://localhost:9090
-# DNS API: http://localhost:8080
+# Or native development
+cargo run
 ```
 
-### Start Canary Monitoring
-```bash
-# Start external monitoring
-./scripts/start-canary.sh start --daemon
-
-# Check status
-./scripts/start-canary.sh status
-
-# Stop monitoring
-./scripts/start-canary.sh stop
-```
-
-### Test DNS Server
-```bash
-# Query DNS server
-dig @localhost -p 12312 example.com
-
-# Add DNS record via API
-curl -X POST http://localhost:8080/records \
-  -H "Content-Type: application/json" \
-  -d '{"name": "test.example.com", "ip": "192.168.1.100", "ttl": 300}'
-```
-
-## 📊 Monitoring Dashboards
-
-Access the monitoring dashboards after starting the full stack:
-
-- **DNS Overview**: Main server metrics and performance
-- **DNS Canary**: External monitoring and health checks  
-- **DNS System Metrics**: Infrastructure and system-level metrics
-- **DNS Protocol**: Protocol-level statistics and analysis
-- **DNS Record Management**: Record operations and API performance
-
-## 🔧 API Usage
+### Test it
 
 ```bash
-# Add a DNS record
+# Add a record
 curl -X POST http://localhost:8080/records \
   -H "Content-Type: application/json" \
   -d '{"name": "example.com", "ip": "93.184.216.34", "ttl": 300}'
 
-# Query the record
+# Query it
 dig @localhost -p 12312 example.com
 
-# List all records
+# List records
 curl http://localhost:8080/records
-
-# Update a record
-curl -X PUT http://localhost:8080/records/example.com \
-  -H "Content-Type: application/json" \
-  -d '{"ip": "192.168.1.200", "ttl": 600}'
-
-# Delete a record
-curl -X DELETE http://localhost:8080/records/example.com
 ```
 
-## 📈 Performance
+## API
 
-- **Throughput**: 18,000+ QPS sustained
-- **Latency**: <2ms DNS queries, ~12ms API to DNS resolution
-- **Memory**: ~4MB stable under load
-- **Concurrent Operations**: 100% success rate
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/records` | Create a record |
+| `GET` | `/records` | List records (paginated) |
+| `PUT` | `/records/:name` | Update a record |
+| `DELETE` | `/records/:name` | Delete a record |
 
-## 🔧 Development
+## Development
 
-### Native Development
 ```bash
-# Prerequisites: Rust 1.70+
 cargo build --release
-cargo run --bin rind
-
-# Run tests
 cargo test
-
-# Run benchmarks
 cargo bench
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-## 📚 Documentation
+CI runs `fmt --check`, `clippy`, and `test` on every push/PR via GitHub Actions.
 
-- **[Full Stack Deployment](FULLSTACK.md)** - Complete production setup
-- **[Metrics & Monitoring](METRICS.md)** - Detailed metrics documentation  
-- **[Docker Guide](DOCKER.md)** - Container deployment
-- **[Dashboard Guide](DASHBOARDS.md)** - Monitoring dashboards
+## Monitoring
 
-## 🏗️ Architecture
+The full stack includes Prometheus, Grafana, Loki, and AlertManager. After starting:
 
-- **Async/Await**: Built on Tokio for high concurrency
-- **UDP Server**: Handles DNS queries on port 12312
-- **HTTP API**: REST API on port 8080  
-- **Shared State**: Thread-safe record management
-- **File Persistence**: Automatic saving to dns_records.txt
-- **Monitoring**: Prometheus metrics with Grafana dashboards
+- **Grafana**: http://localhost:3000 (admin/rind-admin-2025)
+- **Prometheus**: http://localhost:9090
+- **HAProxy Stats**: http://localhost:8404/stats
 
-## 🤝 Contributing
+See [docs/METRICS.md](docs/METRICS.md) for available metrics and PromQL queries.
 
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass: `cargo test`
-5. Submit a pull request
+## Documentation
+
+- [Full Stack Deployment](docs/FULLSTACK.md) — Docker Compose setup with monitoring
+- [Docker Guide](docs/DOCKER.md) — Building and running containers
+- [Metrics](docs/METRICS.md) — Prometheus metrics, Grafana dashboards
+- [System Metrics](docs/SYSTEM_METRICS_GUIDE.md) — Infrastructure-level monitoring
+- [Remote Deployment](docs/REMOTE_DEPLOYMENT.md) — Deploying to a remote host
+
+## License
+
+MIT — see [LICENSE](LICENSE).
