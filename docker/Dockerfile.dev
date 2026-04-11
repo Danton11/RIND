@@ -1,5 +1,5 @@
 # Development Dockerfile with full Rust toolchain
-FROM rust:1.86
+FROM rust:latest
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
