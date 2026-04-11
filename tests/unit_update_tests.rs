@@ -1,9 +1,9 @@
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
-use tempfile::NamedTempFile;
 
 use rind::update::{load_records_from_file, save_records_to_file, DnsRecord, DnsRecords};
 
@@ -15,7 +15,7 @@ fn test_load_records_from_file_valid() {
     let records = load_records_from_file(path).unwrap();
     // Records are now indexed by UUID, so we need to find by name
     let rec = records.values().find(|r| r.name == "test.com").unwrap();
-    assert_eq!(rec.ip, Some(Ipv4Addr::new(1,2,3,4)));
+    assert_eq!(rec.ip, Some(Ipv4Addr::new(1, 2, 3, 4)));
     assert_eq!(rec.ttl, 60);
     assert_eq!(rec.record_type, "A");
     assert_eq!(rec.class, "IN");
@@ -26,7 +26,7 @@ fn test_save_and_load_records_to_file() {
     let mut records = DnsRecords::new();
     let record = DnsRecord::new(
         "foo.com".to_string(),
-        Some(Ipv4Addr::new(5,6,7,8)),
+        Some(Ipv4Addr::new(5, 6, 7, 8)),
         120,
         "A".to_string(),
         "IN".to_string(),
@@ -39,7 +39,7 @@ fn test_save_and_load_records_to_file() {
     let loaded = load_records_from_file(path).unwrap();
     // Records are now indexed by UUID, so we need to find by name
     let rec = loaded.values().find(|r| r.name == "foo.com").unwrap();
-    assert_eq!(rec.ip, Some(Ipv4Addr::new(5,6,7,8)));
+    assert_eq!(rec.ip, Some(Ipv4Addr::new(5, 6, 7, 8)));
     assert_eq!(rec.ttl, 120);
 }
 
@@ -61,7 +61,7 @@ fn test_update_record() {
     let records = Arc::new(RwLock::new(DnsRecords::new()));
     let new_record = DnsRecord::new(
         "bar.com".to_string(),
-        Some(Ipv4Addr::new(9,9,9,9)),
+        Some(Ipv4Addr::new(9, 9, 9, 9)),
         99,
         "A".to_string(),
         "IN".to_string(),
@@ -75,6 +75,6 @@ fn test_update_record() {
     let loaded = load_records_from_file(path).unwrap();
     // Records are now indexed by UUID, so we need to find by name
     let rec = loaded.values().find(|r| r.name == "bar.com").unwrap();
-    assert_eq!(rec.ip, Some(Ipv4Addr::new(9,9,9,9)));
+    assert_eq!(rec.ip, Some(Ipv4Addr::new(9, 9, 9, 9)));
     assert_eq!(rec.ttl, 99);
 }

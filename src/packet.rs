@@ -1,6 +1,6 @@
+use log::debug;
 use std::error::Error;
 use std::net::Ipv4Addr;
-use log::debug;
 
 /// Parses a DNS packet from bytes
 pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
@@ -17,7 +17,7 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
     let _an_count = u16::from_be_bytes([packet[6], packet[7]]);
     let _ns_count = u16::from_be_bytes([packet[8], packet[9]]);
     let ar_count = u16::from_be_bytes([packet[10], packet[11]]);
-    
+
     debug!("Header - ID: {}, Questions: {}", id, qd_count);
 
     if qd_count != 1 {
@@ -49,11 +49,14 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
             let opt_type = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
             let opt_udp_payload_size = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]);
             let _opt_data_length = u16::from_be_bytes([packet[offset + 8], packet[offset + 9]]);
-            
+
             if opt_type == 41 {
                 has_opt = true;
                 opt_payload_size = opt_udp_payload_size;
-                debug!("Found OPT record with payload size: {}", opt_udp_payload_size);
+                debug!(
+                    "Found OPT record with payload size: {}",
+                    opt_udp_payload_size
+                );
             }
         }
     }
@@ -61,7 +64,11 @@ pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
     Ok(DnsQuery {
         id,
         flags,
-        questions: vec![Question { name, qtype, qclass }],
+        questions: vec![Question {
+            name,
+            qtype,
+            qclass,
+        }],
         has_opt,
         opt_payload_size,
     })
@@ -73,7 +80,7 @@ pub struct DnsQuery {
     pub id: u16,
     pub flags: u16,
     pub questions: Vec<Question>,
-    pub has_opt: bool, // Indicates if the query had an OPT record
+    pub has_opt: bool,         // Indicates if the query had an OPT record
     pub opt_payload_size: u16, // The UDP payload size from the OPT record
 }
 
@@ -86,12 +93,15 @@ pub struct Question {
 }
 
 /// Reads a domain name from DNS packet at given offset
-fn read_name(packet: &[u8], mut offset: usize) -> Result<(String, usize), Box<dyn Error + Send + Sync>> {
+fn read_name(
+    packet: &[u8],
+    mut offset: usize,
+) -> Result<(String, usize), Box<dyn Error + Send + Sync>> {
     let mut name = String::new();
-    
+
     loop {
         let len = *packet.get(offset).ok_or("Unexpected end of packet")? as usize;
-        
+
         if len == 0 {
             offset += 1;
             break;
@@ -116,7 +126,14 @@ fn read_name(packet: &[u8], mut offset: usize) -> Result<(String, usize), Box<dy
 }
 
 /// Builds a DNS response packet
-pub fn build_response(query: DnsQuery, ip: Ipv4Addr, response_code: u8, ttl: u32, _record_type: String, _class: String) -> Vec<u8> {
+pub fn build_response(
+    query: DnsQuery,
+    ip: Ipv4Addr,
+    response_code: u8,
+    ttl: u32,
+    _record_type: String,
+    _class: String,
+) -> Vec<u8> {
     let mut response = Vec::new();
 
     // Header
@@ -125,15 +142,21 @@ pub fn build_response(query: DnsQuery, ip: Ipv4Addr, response_code: u8, ttl: u32
     let flags_with_rcode = (query.flags | 0x8000) | (response_code as u16);
     response.extend(&flags_with_rcode.to_be_bytes());
     response.extend(&1u16.to_be_bytes()); // QDCOUNT
-    // ANCOUNT should be 1 only if we have a successful response (response_code == 0)
+                                          // ANCOUNT should be 1 only if we have a successful response (response_code == 0)
     let ancount = if response_code == 0 { 1u16 } else { 0u16 };
     response.extend(&ancount.to_be_bytes()); // ANCOUNT
-    
-    debug!("Building response: response_code={}, ancount={}", response_code, ancount);
+
+    debug!(
+        "Building response: response_code={}, ancount={}",
+        response_code, ancount
+    );
     response.extend(&0u16.to_be_bytes()); // NSCOUNT
     response.extend(&1u16.to_be_bytes()); // ARCOUNT
-    
-    debug!("Building response: response_code={}, ancount={}", response_code, ancount);
+
+    debug!(
+        "Building response: response_code={}, ancount={}",
+        response_code, ancount
+    );
 
     // Question
     for question in query.questions.iter() {
@@ -173,5 +196,3 @@ fn encode_name(name: &str) -> Vec<u8> {
     encoded.push(0);
     encoded
 }
-
-

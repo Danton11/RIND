@@ -1,5 +1,5 @@
+use rind::packet::{build_response, parse, DnsQuery, Question};
 use std::net::Ipv4Addr;
-use rind::packet::{parse, build_response, DnsQuery, Question};
 
 #[test]
 fn test_read_name_through_parse() {
@@ -11,9 +11,10 @@ fn test_read_name_through_parse() {
         0x00, 0x00, // ANCOUNT
         0x00, 0x00, // NSCOUNT
         0x00, 0x00, // ARCOUNT
-        3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, // www.example.com
+        3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm',
+        0, // www.example.com
         0x00, 0x01, // QTYPE: A
-        0x00, 0x01  // QCLASS: IN
+        0x00, 0x01, // QCLASS: IN
     ];
     let result = parse(&packet);
     assert!(result.is_ok());
@@ -32,7 +33,7 @@ fn test_parse_valid_packet() {
         0x00, 0x00, // ARCOUNT
         1, b'a', 3, b'c', b'o', b'm', 0, // QNAME: a.com
         0x00, 0x01, // QTYPE: A
-        0x00, 0x01  // QCLASS: IN
+        0x00, 0x01, // QCLASS: IN
     ];
     let result = parse(&packet);
     assert!(result.is_ok());

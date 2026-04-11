@@ -1,20 +1,20 @@
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::test::request;
 use warp::Filter;
-use serde_json::Value;
-use std::collections::HashMap;
 
 // Import the modules we need to test
-use rind::update::{DnsRecord, DnsRecords, ApiResponse, RecordListResponse};
+use rind::update::{ApiResponse, DnsRecord, DnsRecords, RecordListResponse};
 
 /// Helper function to create test records
 fn create_test_records() -> Arc<RwLock<DnsRecords>> {
     let mut records = HashMap::new();
-    
+
     // Create test records with different timestamps to test ordering
     let now = chrono::Utc::now();
-    
+
     let record1 = DnsRecord {
         id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
         name: "example1.com".to_string(),
@@ -26,7 +26,7 @@ fn create_test_records() -> Arc<RwLock<DnsRecords>> {
         created_at: now - chrono::Duration::minutes(10),
         updated_at: now - chrono::Duration::minutes(10),
     };
-    
+
     let record2 = DnsRecord {
         id: "550e8400-e29b-41d4-a716-446655440002".to_string(),
         name: "example2.com".to_string(),
@@ -38,7 +38,7 @@ fn create_test_records() -> Arc<RwLock<DnsRecords>> {
         created_at: now - chrono::Duration::minutes(5),
         updated_at: now - chrono::Duration::minutes(5),
     };
-    
+
     let record3 = DnsRecord {
         id: "550e8400-e29b-41d4-a716-446655440003".to_string(),
         name: "example3.com".to_string(),
@@ -50,11 +50,11 @@ fn create_test_records() -> Arc<RwLock<DnsRecords>> {
         created_at: now,
         updated_at: now,
     };
-    
+
     records.insert(record1.id.clone(), record1);
     records.insert(record2.id.clone(), record2);
     records.insert(record3.id.clone(), record3);
-    
+
     Arc::new(RwLock::new(records))
 }
 
@@ -68,7 +68,7 @@ async fn list_records_handler(
         .get("page")
         .and_then(|p| p.parse::<usize>().ok())
         .unwrap_or(1);
-    
+
     let per_page = query_params
         .get("per_page")
         .and_then(|p| p.parse::<usize>().ok())
@@ -103,7 +103,7 @@ async fn list_records_handler(
 fn create_test_api() -> impl warp::Filter<Extract = impl warp::Reply> + Clone {
     let records = create_test_records();
     let records_filter = warp::any().map(move || Arc::clone(&records));
-    
+
     // GET /records - List all records with pagination
     warp::path("records")
         .and(warp::path::end())
@@ -116,30 +116,26 @@ fn create_test_api() -> impl warp::Filter<Extract = impl warp::Reply> + Clone {
 #[tokio::test]
 async fn test_list_records_default_pagination() {
     let api = create_test_api();
-    
-    let response = request()
-        .method("GET")
-        .path("/records")
-        .reply(&api)
-        .await;
-    
+
+    let response = request().method("GET").path("/records").reply(&api).await;
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
-    
+
     // Verify response structure
     assert_eq!(body["success"], true);
     assert!(body["data"].is_object());
     assert!(body["error"].is_null());
     assert!(body["timestamp"].is_string());
-    
+
     // Verify pagination metadata
     let data = &body["data"];
     assert_eq!(data["total"], 3);
     assert_eq!(data["page"], 1);
     assert_eq!(data["per_page"], 50);
     assert_eq!(data["records"].as_array().unwrap().len(), 3);
-    
+
     // Verify records are sorted by creation time (oldest first)
     let records = data["records"].as_array().unwrap();
     assert_eq!(records[0]["name"], "example1.com");
@@ -150,18 +146,18 @@ async fn test_list_records_default_pagination() {
 #[tokio::test]
 async fn test_list_records_with_pagination() {
     let api = create_test_api();
-    
+
     // Test first page with per_page=2
     let response = request()
         .method("GET")
         .path("/records?page=1&per_page=2")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
-    
+
     // Verify response structure
     assert_eq!(body["success"], true);
     let data = &body["data"];
@@ -169,16 +165,16 @@ async fn test_list_records_with_pagination() {
     assert_eq!(data["page"], 1);
     assert_eq!(data["per_page"], 2);
     assert_eq!(data["records"].as_array().unwrap().len(), 2);
-    
+
     // Test second page
     let response = request()
         .method("GET")
         .path("/records?page=2&per_page=2")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     let data = &body["data"];
     assert_eq!(data["total"], 3);
@@ -190,18 +186,18 @@ async fn test_list_records_with_pagination() {
 #[tokio::test]
 async fn test_list_records_empty_page() {
     let api = create_test_api();
-    
+
     // Test page beyond available records
     let response = request()
         .method("GET")
         .path("/records?page=10&per_page=10")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
-    
+
     // Verify response structure
     assert_eq!(body["success"], true);
     let data = &body["data"];
@@ -214,29 +210,29 @@ async fn test_list_records_empty_page() {
 #[tokio::test]
 async fn test_list_records_invalid_pagination() {
     let api = create_test_api();
-    
+
     // Test invalid page number (0)
     let response = request()
         .method("GET")
         .path("/records?page=0&per_page=10")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 400);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     assert_eq!(body["success"], false);
     assert!(body["error"].is_string());
-    
+
     // Test invalid per_page (too large)
     let response = request()
         .method("GET")
         .path("/records?page=1&per_page=2000")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 400);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     assert_eq!(body["success"], false);
     assert!(body["error"].is_string());
@@ -245,30 +241,30 @@ async fn test_list_records_invalid_pagination() {
 #[tokio::test]
 async fn test_list_records_malformed_query_params() {
     let api = create_test_api();
-    
+
     // Test with malformed page parameter (should default to 1)
     let response = request()
         .method("GET")
         .path("/records?page=invalid&per_page=10")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     let data = &body["data"];
     assert_eq!(data["page"], 1); // Should default to 1
     assert_eq!(data["per_page"], 10);
-    
+
     // Test with malformed per_page parameter (should default to 50)
     let response = request()
         .method("GET")
         .path("/records?page=1&per_page=invalid")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     let data = &body["data"];
     assert_eq!(data["page"], 1);
@@ -278,19 +274,19 @@ async fn test_list_records_malformed_query_params() {
 #[tokio::test]
 async fn test_list_records_record_structure() {
     let api = create_test_api();
-    
+
     let response = request()
         .method("GET")
         .path("/records?per_page=1")
         .reply(&api)
         .await;
-    
+
     assert_eq!(response.status(), 200);
-    
+
     let body: Value = serde_json::from_slice(response.body()).unwrap();
     let records = body["data"]["records"].as_array().unwrap();
     let record = &records[0];
-    
+
     // Verify all required fields are present
     assert!(record["id"].is_string());
     assert!(record["name"].is_string());
@@ -299,7 +295,7 @@ async fn test_list_records_record_structure() {
     assert!(record["class"].is_string());
     assert!(record["created_at"].is_string());
     assert!(record["updated_at"].is_string());
-    
+
     // IP and value can be null for certain record types
     assert!(record["ip"].is_string() || record["ip"].is_null());
     assert!(record["value"].is_string() || record["value"].is_null());

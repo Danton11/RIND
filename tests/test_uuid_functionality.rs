@@ -1,4 +1,4 @@
-use rind::update::{DnsRecord, generate_record_id};
+use rind::update::{generate_record_id, DnsRecord};
 use std::net::Ipv4Addr;
 
 #[test]
@@ -6,7 +6,7 @@ fn test_uuid_generation() {
     // Test that UUIDs are generated and unique
     let id1 = generate_record_id();
     let id2 = generate_record_id();
-    
+
     assert_ne!(id1, id2, "Generated UUIDs should be unique");
     assert_eq!(id1.len(), 36, "UUID should be 36 characters long");
     assert_eq!(id2.len(), 36, "UUID should be 36 characters long");
@@ -30,7 +30,7 @@ fn test_dns_record_new_constructor() {
     assert_eq!(record.record_type, "A");
     assert_eq!(record.class, "IN");
     assert!(record.value.is_none());
-    
+
     // Timestamps should be set
     assert!(record.created_at <= record.updated_at);
 }
@@ -46,7 +46,10 @@ fn test_record_validation_valid() {
         None,
     );
 
-    assert!(record.validate().is_ok(), "Valid record should pass validation");
+    assert!(
+        record.validate().is_ok(),
+        "Valid record should pass validation"
+    );
 }
 
 #[test]
@@ -60,7 +63,10 @@ fn test_record_validation_invalid_empty_name() {
         None,
     );
 
-    assert!(record.validate().is_err(), "Record with empty name should fail validation");
+    assert!(
+        record.validate().is_err(),
+        "Record with empty name should fail validation"
+    );
 }
 
 #[test]
@@ -74,7 +80,10 @@ fn test_record_validation_invalid_record_type() {
         None,
     );
 
-    assert!(record.validate().is_err(), "Record with invalid type should fail validation");
+    assert!(
+        record.validate().is_err(),
+        "Record with invalid type should fail validation"
+    );
 }
 
 #[test]
@@ -88,7 +97,10 @@ fn test_record_validation_a_record_without_ip() {
         None,
     );
 
-    assert!(record.validate().is_err(), "A record without IP should fail validation");
+    assert!(
+        record.validate().is_err(),
+        "A record without IP should fail validation"
+    );
 }
 
 #[test]
@@ -103,13 +115,19 @@ fn test_record_touch_updates_timestamp() {
     );
 
     let original_updated_at = record.updated_at;
-    
+
     // Sleep a bit to ensure timestamp difference
     std::thread::sleep(std::time::Duration::from_millis(10));
     record.touch();
-    
-    assert!(record.updated_at > original_updated_at, "touch() should update the timestamp");
-    assert_eq!(record.created_at, original_updated_at, "created_at should not change");
+
+    assert!(
+        record.updated_at > original_updated_at,
+        "touch() should update the timestamp"
+    );
+    assert_eq!(
+        record.created_at, original_updated_at,
+        "created_at should not change"
+    );
 }
 
 #[test]
@@ -133,6 +151,9 @@ fn test_record_has_same_content() {
     );
 
     // Should have same content despite different IDs and timestamps
-    assert!(record1.has_same_content(&record2), "Records with same content should be detected");
+    assert!(
+        record1.has_same_content(&record2),
+        "Records with same content should be detected"
+    );
     assert_ne!(record1.id, record2.id, "Records should have different IDs");
 }

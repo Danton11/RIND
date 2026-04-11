@@ -1,6 +1,8 @@
+use rind::update::{
+    ensure_datastore_initialized, initialize_empty_datastore, validate_datastore_format,
+};
 use std::fs;
 use tempfile::tempdir;
-use rind::update::{initialize_empty_datastore, validate_datastore_format, ensure_datastore_initialized};
 
 #[test]
 fn test_initialize_empty_datastore() {
@@ -10,21 +12,25 @@ fn test_initialize_empty_datastore() {
 
     // Test successful initialization
     let result = initialize_empty_datastore(file_path_str);
-    assert!(result.is_ok(), "Failed to initialize empty datastore: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Failed to initialize empty datastore: {:?}",
+        result
+    );
 
     // Verify file was created
     assert!(file_path.exists(), "Datastore file was not created");
 
     // Read and verify content
     let content = fs::read_to_string(&file_path).unwrap();
-    
+
     // Check for header comments
     assert!(content.contains("DNS Records File - Enhanced UUID Format"));
     assert!(content.contains("Format: id:name:ip:ttl:type:class:value"));
     assert!(content.contains("id: UUID v4 identifier"));
     assert!(content.contains("Examples:"));
     assert!(content.contains("550e8400-e29b-41d4-a716-446655440000:example.com"));
-    
+
     // Verify it ends with empty line for records
     assert!(content.ends_with("\n\n"));
 }
@@ -44,7 +50,10 @@ fn test_validate_datastore_format() {
     initialize_empty_datastore(file_path_str).unwrap();
     let result = validate_datastore_format(file_path_str);
     assert!(result.is_ok());
-    assert!(result.unwrap(), "Properly formatted file should return true");
+    assert!(
+        result.unwrap(),
+        "Properly formatted file should return true"
+    );
 
     // Test file with UUID format record
     let uuid_content = "550e8400-e29b-41d4-a716-446655440000:example.com:93.184.216.34:300:A:IN\n";
@@ -69,7 +78,11 @@ fn test_ensure_datastore_initialized() {
 
     // Test initialization of non-existent file
     let result = ensure_datastore_initialized(file_path_str);
-    assert!(result.is_ok(), "Failed to ensure datastore initialized: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Failed to ensure datastore initialized: {:?}",
+        result
+    );
     assert!(file_path.exists(), "Datastore file should be created");
 
     // Verify content
@@ -79,10 +92,17 @@ fn test_ensure_datastore_initialized() {
     // Test with already initialized file (should not overwrite)
     let original_content = fs::read_to_string(&file_path).unwrap();
     let result = ensure_datastore_initialized(file_path_str);
-    assert!(result.is_ok(), "Failed on already initialized file: {:?}", result);
-    
+    assert!(
+        result.is_ok(),
+        "Failed on already initialized file: {:?}",
+        result
+    );
+
     let new_content = fs::read_to_string(&file_path).unwrap();
-    assert_eq!(original_content, new_content, "File should not be overwritten");
+    assert_eq!(
+        original_content, new_content,
+        "File should not be overwritten"
+    );
 }
 
 #[test]

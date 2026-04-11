@@ -1,20 +1,20 @@
-use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, RwLock};
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{info, debug, error, warn, trace, span, Level, Instrument};
+use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, error, info, span, trace, warn, Instrument, Level};
 
+use crate::metrics::MetricsRegistry;
 use crate::packet;
 use crate::query;
 use crate::update::DnsRecords;
-use crate::metrics::MetricsRegistry;
 
 /// Runs the DNS server on the specified address
 pub async fn run(
-    addr: &str, 
-    records: Arc<RwLock<DnsRecords>>, 
-    metrics_registry: Arc<RwLock<MetricsRegistry>>
+    addr: &str,
+    records: Arc<RwLock<DnsRecords>>,
+    metrics_registry: Arc<RwLock<MetricsRegistry>>,
 ) -> Result<(), Box<dyn Error>> {
     let server_span = span!(Level::INFO, "dns_server", bind_addr = %addr);
     let _enter = server_span.enter();
@@ -22,9 +22,8 @@ pub async fn run(
     let socket = Arc::new(UdpSocket::bind(addr).await?);
     let (tx, mut rx) = mpsc::channel::<(Vec<u8>, std::net::SocketAddr)>(1024);
 
-    let instance_id = std::env::var("SERVER_ID").unwrap_or_else(|_| {
-        format!("dns-server-{}", std::process::id())
-    });
+    let instance_id =
+        std::env::var("SERVER_ID").unwrap_or_else(|_| format!("dns-server-{}", std::process::id()));
 
     info!(
         instance_id = %instance_id,
@@ -37,10 +36,11 @@ pub async fn run(
     let socket_clone = Arc::clone(&socket);
     let instance_id_clone = instance_id.clone();
     tokio::spawn(async move {
-        let packet_receiver_span = span!(Level::DEBUG, "packet_receiver", instance_id = %instance_id_clone);
+        let packet_receiver_span =
+            span!(Level::DEBUG, "packet_receiver", instance_id = %instance_id_clone);
         let mut buf = vec![0u8; 512];
         let mut packet_count = 0u64;
-        
+
         async move {
             loop {
                 match socket_clone.recv_from(&mut buf).await {
@@ -53,7 +53,7 @@ pub async fn run(
                             instance_id = %instance_id_clone,
                             "Received UDP packet"
                         );
-                        
+
                         if tx.send((buf[..len].to_vec(), addr)).await.is_err() {
                             error!(
                                 instance_id = %instance_id_clone,
@@ -87,16 +87,23 @@ pub async fn run(
 
         tokio::spawn(async move {
             let handler_span = span!(
-                Level::DEBUG, 
+                Level::DEBUG,
                 "packet_handler",
                 client_addr = %addr,
                 handler_id = handler_id,
                 instance_id = %instance_id_clone
             );
-            
-            handle_packet(packet, addr, socket_clone, records_clone, metrics_clone, instance_id_clone)
-                .instrument(handler_span)
-                .await;
+
+            handle_packet(
+                packet,
+                addr,
+                socket_clone,
+                records_clone,
+                metrics_clone,
+                instance_id_clone,
+            )
+            .instrument(handler_span)
+            .await;
         });
     }
 
@@ -105,12 +112,12 @@ pub async fn run(
 
 /// Parses DNS packet, processes query, and sends response
 async fn handle_packet(
-    packet: Vec<u8>, 
-    addr: std::net::SocketAddr, 
-    socket: Arc<UdpSocket>, 
+    packet: Vec<u8>,
+    addr: std::net::SocketAddr,
+    socket: Arc<UdpSocket>,
     records: Arc<RwLock<DnsRecords>>,
     metrics_registry: Arc<RwLock<MetricsRegistry>>,
-    instance_id: String
+    instance_id: String,
 ) {
     let start_time = Instant::now();
     let packet_size = packet.len();
@@ -123,22 +130,21 @@ async fn handle_packet(
     );
 
     // Parse the DNS packet
-    let parsing_span = span!(Level::TRACE, "packet_parsing", client_addr = %addr, instance_id = %instance_id);
-    let parse_result = parsing_span.in_scope(|| {
-        packet::parse(&packet)
-    });
+    let parsing_span =
+        span!(Level::TRACE, "packet_parsing", client_addr = %addr, instance_id = %instance_id);
+    let parse_result = parsing_span.in_scope(|| packet::parse(&packet));
 
     match parse_result {
         Ok(query) => {
             let query_id = query.id;
             let question_count = query.questions.len();
-            
+
             // Extract query details for logging and metrics
             let (query_type, query_name, _query_type_num) = if !query.questions.is_empty() {
                 let question = &query.questions[0];
                 let type_str = match question.qtype {
                     1 => "A",
-                    28 => "AAAA", 
+                    28 => "AAAA",
                     15 => "MX",
                     2 => "NS",
                     5 => "CNAME",
@@ -165,14 +171,16 @@ async fn handle_packet(
             // Increment query counter for metrics
             {
                 let metrics = metrics_registry.read().await;
-                metrics.dns_metrics().queries_total
+                metrics
+                    .dns_metrics()
+                    .queries_total
                     .with_label_values(&[query_type, &instance_id])
                     .inc();
             }
 
             // Process the query
             let query_processing_span = span!(
-                Level::DEBUG, 
+                Level::DEBUG,
                 "query_processing",
                 client_addr = %addr,
                 query_id = query_id,
@@ -182,11 +190,9 @@ async fn handle_packet(
             );
 
             let (response, response_code) = query_processing_span
-                .in_scope(|| async {
-                    query::handle_query_with_code(query, records).await
-                })
+                .in_scope(|| async { query::handle_query_with_code(query, records).await })
                 .await;
-            
+
             // Calculate processing time
             let processing_duration = start_time.elapsed();
             let processing_time_ms = processing_duration.as_millis() as f64;
@@ -194,7 +200,9 @@ async fn handle_packet(
             // Record query processing time in metrics
             {
                 let metrics = metrics_registry.read().await;
-                metrics.dns_metrics().query_duration
+                metrics
+                    .dns_metrics()
+                    .query_duration
                     .with_label_values(&[query_type, &instance_id])
                     .observe(processing_duration.as_secs_f64());
             }
@@ -202,7 +210,7 @@ async fn handle_packet(
             // Map response code to string for logging and metrics
             let response_code_str = match response_code {
                 0 => "NOERROR",
-                1 => "FORMERR", 
+                1 => "FORMERR",
                 2 => "SERVFAIL",
                 3 => "NXDOMAIN",
                 4 => "NOTIMP",
@@ -213,7 +221,9 @@ async fn handle_packet(
             // Track response codes in metrics
             {
                 let metrics = metrics_registry.read().await;
-                metrics.dns_metrics().responses_total
+                metrics
+                    .dns_metrics()
+                    .responses_total
                     .with_label_values(&[response_code_str, &instance_id])
                     .inc();
 
@@ -262,12 +272,12 @@ async fn handle_packet(
                     response_size = response.len(),
                     instance_id = %instance_id,
                     "DNS query completed with non-standard response code"
-                )
+                ),
             }
 
             // Send response back to client
             let response_span = span!(
-                Level::TRACE, 
+                Level::TRACE,
                 "response_transmission",
                 client_addr = %addr,
                 query_id = query_id,
@@ -275,9 +285,10 @@ async fn handle_packet(
                 instance_id = %instance_id
             );
 
-            if let Err(e) = response_span.in_scope(|| async {
-                socket.send_to(&response, &addr).await
-            }).await {
+            if let Err(e) = response_span
+                .in_scope(|| async { socket.send_to(&response, &addr).await })
+                .await
+            {
                 error!(
                     client_addr = %addr,
                     query_id = query_id,
@@ -288,7 +299,7 @@ async fn handle_packet(
                     instance_id = %instance_id,
                     "Failed to send DNS response to client"
                 );
-                
+
                 // Increment network error counter
                 {
                     let metrics = metrics_registry.read().await;
@@ -307,7 +318,7 @@ async fn handle_packet(
         }
         Err(e) => {
             let total_time_ms = start_time.elapsed().as_millis() as f64;
-            
+
             error!(
                 client_addr = %addr,
                 packet_size = packet_size,
@@ -317,7 +328,7 @@ async fn handle_packet(
                 packet_hex = %hex::encode(&packet[..packet_size.min(32)]), // Log first 32 bytes for debugging
                 "Failed to parse DNS packet"
             );
-            
+
             // Increment packet parsing error counter
             {
                 let metrics = metrics_registry.read().await;
@@ -357,10 +368,10 @@ mod tests {
         );
         records.insert(record.id.clone(), record);
         let records = Arc::new(RwLock::new(records));
-        
+
         // Create metrics registry
         let metrics_registry = Arc::new(RwLock::new(MetricsRegistry::new().unwrap()));
-        
+
         // Create a simple DNS query packet for test.com A record
         let packet = vec![
             0x12, 0x34, // ID
@@ -370,25 +381,31 @@ mod tests {
             0x00, 0x00, // NSCOUNT
             0x00, 0x00, // ARCOUNT
             // Question: test.com A IN
-            0x04, b't', b'e', b's', b't',
-            0x03, b'c', b'o', b'm',
-            0x00, // End of name
+            0x04, b't', b'e', b's', b't', 0x03, b'c', b'o', b'm', 0x00, // End of name
             0x00, 0x01, // Type A
             0x00, 0x01, // Class IN
         ];
-        
+
         // Create a mock socket (we won't actually send anything)
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = "127.0.0.1:12345".parse().unwrap();
         let instance_id = "test-server-1".to_string();
-        
+
         // Call handle_packet
-        handle_packet(packet, addr, socket, records, metrics_registry.clone(), instance_id).await;
-        
+        handle_packet(
+            packet,
+            addr,
+            socket,
+            records,
+            metrics_registry.clone(),
+            instance_id,
+        )
+        .await;
+
         // Verify metrics were recorded
         let metrics = metrics_registry.read().await;
         let metrics_text = metrics.gather_metrics().unwrap();
-        
+
         // Check that query counter was incremented
         assert!(metrics_text.contains("dns_queries_total"));
         assert!(metrics_text.contains("dns_responses_total"));
@@ -399,25 +416,33 @@ mod tests {
     async fn test_handle_packet_parsing_error() {
         // Create empty records
         let records = Arc::new(RwLock::new(HashMap::new()));
-        
+
         // Create metrics registry
         let metrics_registry = Arc::new(RwLock::new(MetricsRegistry::new().unwrap()));
-        
+
         // Create an invalid packet (too short)
         let packet = vec![0x12, 0x34]; // Only 2 bytes, should cause parsing error
-        
+
         // Create a mock socket
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = "127.0.0.1:12345".parse().unwrap();
         let instance_id = "test-server-1".to_string();
-        
+
         // Call handle_packet
-        handle_packet(packet, addr, socket, records, metrics_registry.clone(), instance_id).await;
-        
+        handle_packet(
+            packet,
+            addr,
+            socket,
+            records,
+            metrics_registry.clone(),
+            instance_id,
+        )
+        .await;
+
         // Verify error metrics were recorded
         let metrics = metrics_registry.read().await;
         let metrics_text = metrics.gather_metrics().unwrap();
-        
+
         // Check that packet error counter was incremented
         assert!(metrics_text.contains("dns_packet_errors_total"));
     }

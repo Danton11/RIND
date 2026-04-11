@@ -1,12 +1,13 @@
+use std::net::{TcpStream, UdpSocket};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use std::net::{TcpStream, UdpSocket};
-
 
 fn check_server_connectivity() -> bool {
-    let dns_addr = std::env::var("DNS_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string());
-    let api_addr = std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    
+    let dns_addr =
+        std::env::var("DNS_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string());
+    let api_addr =
+        std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
     // Check DNS port (UDP)
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
         if socket.connect(&dns_addr).is_ok() {
@@ -23,7 +24,7 @@ fn run_command(name: &str, command: &str, args: &[&str]) -> (bool, Duration, Str
     println!("{}", "=".repeat(60));
 
     let start = Instant::now();
-    
+
     let output = Command::new(command)
         .args(args)
         .stdout(Stdio::piped())
@@ -37,7 +38,7 @@ fn run_command(name: &str, command: &str, args: &[&str]) -> (bool, Duration, Str
             let success = output.status.success();
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             if success {
                 println!("✅ {} PASSED ({:.2}s)", name, duration.as_secs_f64());
                 if !stdout.is_empty() {
@@ -52,7 +53,7 @@ fn run_command(name: &str, command: &str, args: &[&str]) -> (bool, Duration, Str
                     println!("Output: {}", stdout);
                 }
             }
-            
+
             (success, duration, format!("{}{}", stdout, stderr))
         }
         Err(e) => {
@@ -83,18 +84,15 @@ fn main() {
     let mut results = Vec::new();
 
     // Run Rust unit tests
-    let (success, duration, output) = run_command(
-        "Unit Tests",
-        "cargo",
-        &["test", "--lib", "--tests"]
-    );
+    let (success, duration, output) =
+        run_command("Unit Tests", "cargo", &["test", "--lib", "--tests"]);
     results.push(("Unit Tests", success, duration, output));
 
     // Run integration tests
     let (success, duration, output) = run_command(
-        "Integration Tests", 
+        "Integration Tests",
         "cargo",
-        &["test", "--test", "integration_tests"]
+        &["test", "--test", "integration_tests"],
     );
     results.push(("Integration Tests", success, duration, output));
 
@@ -102,7 +100,7 @@ fn main() {
     let (success, duration, output) = run_command(
         "Benchmarks",
         "cargo",
-        &["bench", "--bench", "dns_benchmarks", "--", "--test"]
+        &["bench", "--bench", "dns_benchmarks", "--", "--test"],
     );
     results.push(("Benchmarks", success, duration, output));
 
@@ -127,7 +125,10 @@ fn main() {
         println!("  {} {:<20} ({:.2}s)", status, name, duration.as_secs_f64());
         if !*success && !error.is_empty() {
             let error_preview = error.lines().next().unwrap_or("Unknown error");
-            println!("       Error: {}...", &error_preview[..error_preview.len().min(80)]);
+            println!(
+                "       Error: {}...",
+                &error_preview[..error_preview.len().min(80)]
+            );
         }
     }
 

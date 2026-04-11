@@ -1,16 +1,16 @@
-use warp::Filter;
+use chrono::{DateTime, Utc};
+use log::{error, info};
+use std::fs;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::{info, error};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
-use std::fs;
-use chrono::{DateTime, Utc};
+use warp::Filter;
 
-mod server;
+mod metrics;
 mod packet;
 mod query;
+mod server;
 mod update;
-mod metrics;
 
 // Get data directory from environment or use current directory as fallback
 fn get_dns_records_file() -> String {
@@ -28,20 +28,24 @@ async fn record_api_metrics(
 ) {
     let registry = metrics_registry.read().await;
     let status_str = status_code.to_string();
-    registry.dns_metrics().record_api_request(endpoint, method, &status_str, duration);
-    
+    registry
+        .dns_metrics()
+        .record_api_request(endpoint, method, &status_str, duration);
+
     // Record error if status code indicates an error
     if status_code >= 400 {
         let error_type = match status_code {
             400 => "bad_request",
-            401 => "unauthorized", 
+            401 => "unauthorized",
             403 => "forbidden",
             404 => "not_found",
             409 => "conflict",
             500 => "internal_server_error",
             _ => "other_error",
         };
-        registry.dns_metrics().record_api_error(endpoint, error_type);
+        registry
+            .dns_metrics()
+            .record_api_error(endpoint, error_type);
     }
 }
 
@@ -54,19 +58,17 @@ async fn get_record_handler(
     let start_time = std::time::Instant::now();
     let endpoint = "/records/{id}";
     let method = "GET";
-    
+
     let result = match update::get_record(records, &id, Some(metrics_registry.clone())).await {
         Ok(record) => {
             let response = update::ApiResponse::success(record);
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                warp::http::StatusCode::OK,
-            );
-            
+            let reply =
+                warp::reply::with_status(warp::reply::json(&response), warp::http::StatusCode::OK);
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
             record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
-            
+
             Ok(reply)
         }
         Err(e) => {
@@ -78,19 +80,23 @@ async fn get_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                status_code,
-            );
-            
+            let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
-            
+            record_api_metrics(
+                endpoint,
+                method,
+                status_code.as_u16(),
+                duration,
+                &metrics_registry,
+            )
+            .await;
+
             Ok(reply)
         }
     };
-    
+
     result
 }
 
@@ -104,43 +110,50 @@ async fn update_record_handler(
     let start_time = std::time::Instant::now();
     let endpoint = "/records/{id}";
     let method = "PUT";
-    
-    let result = match update::update_record(records, &id, update_request, Some(metrics_registry.clone())).await {
-        Ok(record) => {
-            let response = update::ApiResponse::success(record);
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                warp::http::StatusCode::OK,
-            );
-            
-            // Record metrics
-            let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
-            
-            Ok(reply)
-        }
-        Err(e) => {
-            let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
-            let status_code = match e.to_status_code() {
-                404 => warp::http::StatusCode::NOT_FOUND,
-                400 => warp::http::StatusCode::BAD_REQUEST,
-                409 => warp::http::StatusCode::CONFLICT,
-                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                status_code,
-            );
-            
-            // Record metrics
-            let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
-            
-            Ok(reply)
-        }
-    };
-    
+
+    let result =
+        match update::update_record(records, &id, update_request, Some(metrics_registry.clone()))
+            .await
+        {
+            Ok(record) => {
+                let response = update::ApiResponse::success(record);
+                let reply = warp::reply::with_status(
+                    warp::reply::json(&response),
+                    warp::http::StatusCode::OK,
+                );
+
+                // Record metrics
+                let duration = start_time.elapsed().as_secs_f64();
+                record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
+
+                Ok(reply)
+            }
+            Err(e) => {
+                let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
+                let status_code = match e.to_status_code() {
+                    404 => warp::http::StatusCode::NOT_FOUND,
+                    400 => warp::http::StatusCode::BAD_REQUEST,
+                    409 => warp::http::StatusCode::CONFLICT,
+                    500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
+
+                // Record metrics
+                let duration = start_time.elapsed().as_secs_f64();
+                record_api_metrics(
+                    endpoint,
+                    method,
+                    status_code.as_u16(),
+                    duration,
+                    &metrics_registry,
+                )
+                .await;
+
+                Ok(reply)
+            }
+        };
+
     result
 }
 
@@ -153,7 +166,7 @@ async fn delete_record_handler(
     let start_time = std::time::Instant::now();
     let endpoint = "/records/{id}";
     let method = "DELETE";
-    
+
     let result = match update::delete_record(records, &id, Some(metrics_registry.clone())).await {
         Ok(()) => {
             // Return HTTP 204 No Content on successful deletion
@@ -162,11 +175,11 @@ async fn delete_record_handler(
                 warp::reply::json(&response),
                 warp::http::StatusCode::NO_CONTENT,
             )) as Box<dyn warp::Reply>;
-            
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
             record_api_metrics(endpoint, method, 204, duration, &metrics_registry).await;
-            
+
             Ok(reply)
         }
         Err(e) => {
@@ -182,15 +195,22 @@ async fn delete_record_handler(
                 warp::reply::json(&response),
                 status_code,
             )) as Box<dyn warp::Reply>;
-            
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
-            
+            record_api_metrics(
+                endpoint,
+                method,
+                status_code.as_u16(),
+                duration,
+                &metrics_registry,
+            )
+            .await;
+
             Ok(reply)
         }
     };
-    
+
     result
 }
 
@@ -208,24 +228,24 @@ async fn list_records_handler(
         .get("page")
         .and_then(|p| p.parse::<usize>().ok())
         .unwrap_or(1);
-    
+
     let per_page = query_params
         .get("per_page")
         .and_then(|p| p.parse::<usize>().ok())
         .unwrap_or(50);
 
-    let result = match update::list_records(records, page, per_page, Some(metrics_registry.clone())).await {
+    let result = match update::list_records(records, page, per_page, Some(metrics_registry.clone()))
+        .await
+    {
         Ok(record_list) => {
             let response = update::ApiResponse::success(record_list);
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                warp::http::StatusCode::OK,
-            );
-            
+            let reply =
+                warp::reply::with_status(warp::reply::json(&response), warp::http::StatusCode::OK);
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
             record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
-            
+
             Ok(reply)
         }
         Err(e) => {
@@ -237,19 +257,23 @@ async fn list_records_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                status_code,
-            );
-            
+            let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
-            
+            record_api_metrics(
+                endpoint,
+                method,
+                status_code.as_u16(),
+                duration,
+                &metrics_registry,
+            )
+            .await;
+
             Ok(reply)
         }
     };
-    
+
     result
 }
 
@@ -262,19 +286,25 @@ async fn create_record_handler(
     let start_time = std::time::Instant::now();
     let endpoint = "/records";
     let method = "POST";
-    
-    let result = match update::create_record_from_request(records, create_request, Some(metrics_registry.clone())).await {
+
+    let result = match update::create_record_from_request(
+        records,
+        create_request,
+        Some(metrics_registry.clone()),
+    )
+    .await
+    {
         Ok(record) => {
             let response = update::ApiResponse::success(record);
             let reply = warp::reply::with_status(
                 warp::reply::json(&response),
                 warp::http::StatusCode::CREATED,
             );
-            
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
             record_api_metrics(endpoint, method, 201, duration, &metrics_registry).await;
-            
+
             Ok(reply)
         }
         Err(e) => {
@@ -286,19 +316,23 @@ async fn create_record_handler(
                 500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
-            let reply = warp::reply::with_status(
-                warp::reply::json(&response),
-                status_code,
-            );
-            
+            let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
+
             // Record metrics
             let duration = start_time.elapsed().as_secs_f64();
-            record_api_metrics(endpoint, method, status_code.as_u16(), duration, &metrics_registry).await;
-            
+            record_api_metrics(
+                endpoint,
+                method,
+                status_code.as_u16(),
+                duration,
+                &metrics_registry,
+            )
+            .await;
+
             Ok(reply)
         }
     };
-    
+
     result
 }
 
@@ -307,83 +341,92 @@ fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
     let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level));
-    
+
     // Determine log format from environment variable
     let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
-    
+
     // Check if file logging is disabled (for Docker/container environments)
     let disable_file_logging = std::env::var("DISABLE_FILE_LOGGING")
         .unwrap_or_else(|_| "false".to_string())
         .parse::<bool>()
         .unwrap_or(false);
-    
+
     if disable_file_logging {
         // Output to stdout for Docker log collection
         if log_format == "json" {
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(fmt::layer()
-                    .json()
-                    .with_writer(std::io::stdout)
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_file(true)
-                    .with_line_number(true))
+                .with(
+                    fmt::layer()
+                        .json()
+                        .with_writer(std::io::stdout)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_file(true)
+                        .with_line_number(true),
+                )
                 .init();
         } else {
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(fmt::layer()
-                    .with_writer(std::io::stdout)
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_file(true)
-                    .with_line_number(true)
-                    .with_ansi(true))
+                .with(
+                    fmt::layer()
+                        .with_writer(std::io::stdout)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_file(true)
+                        .with_line_number(true)
+                        .with_ansi(true),
+                )
                 .init();
         }
         println!("Logging initialized - writing to stdout");
     } else {
         // Create logs directory if it doesn't exist
         fs::create_dir_all("logs")?;
-        
+
         // Generate timestamp for log filename
         let now: DateTime<Utc> = Utc::now();
         let timestamp = now.format("%Y-%m-%d_%H");
         let log_filename = format!("logs/rind_{}.log", timestamp);
-        
+
         // Create file appender
-        let file_appender = tracing_appender::rolling::never("logs", format!("rind_{}.log", timestamp));
-        
+        let file_appender =
+            tracing_appender::rolling::never("logs", format!("rind_{}.log", timestamp));
+
         if log_format == "json" {
             // JSON format for production
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(fmt::layer()
-                    .json()
-                    .with_writer(file_appender)
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_file(true)
-                    .with_line_number(true))
+                .with(
+                    fmt::layer()
+                        .json()
+                        .with_writer(file_appender)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_file(true)
+                        .with_line_number(true),
+                )
                 .init();
         } else {
             // Human-readable format for development
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(fmt::layer()
-                    .with_writer(file_appender)
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_file(true)
-                    .with_line_number(true)
-                    .with_ansi(false)) // Disable colors for file output
+                .with(
+                    fmt::layer()
+                        .with_writer(file_appender)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_file(true)
+                        .with_line_number(true)
+                        .with_ansi(false),
+                ) // Disable colors for file output
                 .init();
         }
-        
+
         println!("Logging initialized - writing to: {}", log_filename);
     }
-    
+
     Ok(())
 }
 
@@ -400,12 +443,11 @@ async fn main() {
         .unwrap_or_else(|_| "9090".to_string())
         .parse::<u16>()
         .unwrap_or(9090);
-    let server_id = std::env::var("SERVER_ID").unwrap_or_else(|_| {
-        format!("dns-server-{}", std::process::id())
-    });
+    let server_id =
+        std::env::var("SERVER_ID").unwrap_or_else(|_| format!("dns-server-{}", std::process::id()));
 
     info!("Starting DNS server with server ID: {}", server_id);
-    
+
     // Initialize metrics registry
     let metrics_registry = match metrics::MetricsRegistry::new() {
         Ok(registry) => Arc::new(RwLock::new(registry)),
@@ -419,13 +461,13 @@ async fn main() {
 
     // Get DNS records file path
     let dns_records_file = get_dns_records_file();
-    
+
     // Ensure datastore is initialized before loading records
     if let Err(e) = update::ensure_datastore_initialized(&dns_records_file) {
         error!("Failed to initialize datastore: {}", e);
         std::process::exit(1);
     }
-    
+
     // Load DNS records and create shared references
     let records = update::load_records(&dns_records_file);
     let records_for_filter = Arc::clone(&records);
@@ -435,27 +477,31 @@ async fn main() {
     {
         let records_guard = records.read().await;
         let metrics_guard = metrics_registry.read().await;
-        metrics_guard.dns_metrics().set_active_records_count(records_guard.len() as f64);
+        metrics_guard
+            .dns_metrics()
+            .set_active_records_count(records_guard.len() as f64);
         info!("Initialized active records count: {}", records_guard.len());
     }
 
     let records_filter = warp::any().map(move || Arc::clone(&records_for_filter));
-    
+
     // Create metrics filter
     let metrics_for_filter = Arc::clone(&metrics_registry);
     let metrics_filter = warp::any().map(move || Arc::clone(&metrics_for_filter));
-    
+
     // API route for updating DNS records (legacy)
     let update_route = warp::path("update")
         .and(warp::post())
         .and(warp::body::json())
         .and(records_filter.clone())
-        .map(|new_record: update::DnsRecord, records: Arc<RwLock<update::DnsRecords>>| {
-            tokio::spawn(async move {
-                update::update_record_legacy(records, new_record).await;
-            });
-            warp::reply::reply()
-        });
+        .map(
+            |new_record: update::DnsRecord, records: Arc<RwLock<update::DnsRecords>>| {
+                tokio::spawn(async move {
+                    update::update_record_legacy(records, new_record).await;
+                });
+                warp::reply::reply()
+            },
+        );
 
     // GET /records/{id} - Retrieve a specific record by ID
     let get_record_route = warp::path("records")
@@ -507,7 +553,7 @@ async fn main() {
     let metrics_addr = format!("0.0.0.0:{}", metrics_port);
     let metrics_server = metrics::MetricsServer::new(Arc::clone(&metrics_registry));
     let metrics_addr_clone = metrics_addr.clone();
-    
+
     tokio::spawn(async move {
         let addr = metrics_addr_clone.parse::<std::net::SocketAddr>().unwrap();
         if let Err(e) = metrics_server.start(addr).await {
@@ -515,7 +561,10 @@ async fn main() {
         }
     });
 
-    info!("Metrics server listening on http://{}/metrics", metrics_addr);
+    info!(
+        "Metrics server listening on http://{}/metrics",
+        metrics_addr
+    );
 
     // Combine all API routes
     let api_routes = update_route
@@ -528,7 +577,9 @@ async fn main() {
     // Start API server in background
     let api_addr_clone = api_addr.clone();
     let api_server = async move {
-        warp::serve(api_routes).run(api_addr_clone.parse::<std::net::SocketAddr>().unwrap()).await;
+        warp::serve(api_routes)
+            .run(api_addr_clone.parse::<std::net::SocketAddr>().unwrap())
+            .await;
     };
 
     info!("API server listening on {}", api_addr);

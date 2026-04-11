@@ -1,15 +1,18 @@
+use serde_json::json;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::Filter;
-use serde_json::json;
-use std::net::Ipv4Addr;
 
-use rind::update::{DnsRecord, DnsRecords, ApiResponse};
+use rind::update::{ApiResponse, DnsRecord, DnsRecords};
 
 // Helper function to create a test server with some initial records
-async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone) {
+async fn create_test_server() -> (
+    Arc<RwLock<DnsRecords>>,
+    impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone,
+) {
     let mut records = DnsRecords::new();
-    
+
     // Add a test record
     let test_record = DnsRecord::new(
         "test.example.com".to_string(),
@@ -21,7 +24,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
     );
     let test_id = test_record.id.clone();
     records.insert(test_id, test_record);
-    
+
     let records_arc = Arc::new(RwLock::new(records));
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);
@@ -105,14 +108,14 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         .and_then(get_record_handler);
 
     let routes = delete_record_route.or(get_record_route);
-    
+
     (records_arc, routes)
 }
 
 #[tokio::test]
 async fn test_delete_record_success() {
     let (records_arc, routes) = create_test_server().await;
-    
+
     // Get the test record ID
     let test_id = {
         let records = records_arc.read().await;
@@ -136,7 +139,7 @@ async fn test_delete_record_success() {
 
     // Should return HTTP 204 No Content
     assert_eq!(response.status(), 204);
-    
+
     // Response body should be empty
     assert_eq!(response.body().len(), 0);
 
@@ -146,9 +149,9 @@ async fn test_delete_record_success() {
         .path(&format!("/records/{}", test_id))
         .reply(&routes)
         .await;
-    
+
     assert_eq!(response.status(), 404);
-    
+
     // Verify the record count in memory
     let records = records_arc.read().await;
     assert_eq!(records.len(), 0);
@@ -157,7 +160,7 @@ async fn test_delete_record_success() {
 #[tokio::test]
 async fn test_delete_record_not_found() {
     let (_records_arc, routes) = create_test_server().await;
-    
+
     // Make DELETE request with non-existent ID
     let response = warp::test::request()
         .method("DELETE")
@@ -167,7 +170,7 @@ async fn test_delete_record_not_found() {
 
     // Should return HTTP 404 Not Found
     assert_eq!(response.status(), 404);
-    
+
     // Parse response
     let body: ApiResponse<()> = serde_json::from_slice(response.body()).unwrap();
     assert!(!body.success);
@@ -178,7 +181,7 @@ async fn test_delete_record_not_found() {
 #[tokio::test]
 async fn test_delete_record_multiple_records() {
     let mut records = DnsRecords::new();
-    
+
     // Add multiple test records
     let record1 = DnsRecord::new(
         "test1.example.com".to_string(),
@@ -196,13 +199,13 @@ async fn test_delete_record_multiple_records() {
         "IN".to_string(),
         None,
     );
-    
+
     let record1_id = record1.id.clone();
     let record2_id = record2.id.clone();
-    
+
     records.insert(record1_id.clone(), record1);
     records.insert(record2_id.clone(), record2);
-    
+
     let records_arc = Arc::new(RwLock::new(records));
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);
@@ -215,12 +218,10 @@ async fn test_delete_record_multiple_records() {
         records: Arc<RwLock<DnsRecords>>,
     ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
         match rind::update::delete_record(records, &id, None).await {
-            Ok(()) => {
-                Ok(Box::new(warp::reply::with_status(
-                    warp::reply(),
-                    warp::http::StatusCode::NO_CONTENT,
-                )))
-            }
+            Ok(()) => Ok(Box::new(warp::reply::with_status(
+                warp::reply(),
+                warp::http::StatusCode::NO_CONTENT,
+            ))),
             Err(e) => {
                 let response = ApiResponse::<()>::error(e.to_string());
                 let status_code = match e.to_status_code() {
@@ -257,7 +258,7 @@ async fn test_delete_record_multiple_records() {
         .path(&format!("/records/{}", record1_id))
         .reply(&delete_record_route)
         .await;
-    
+
     assert_eq!(response.status(), 204);
 
     // Verify we now have 1 record and it's the correct one
@@ -274,7 +275,7 @@ async fn test_delete_record_multiple_records() {
         .path(&format!("/records/{}", record2_id))
         .reply(&delete_record_route)
         .await;
-    
+
     assert_eq!(response.status(), 204);
 
     // Verify we now have 0 records
@@ -287,7 +288,7 @@ async fn test_delete_record_multiple_records() {
 #[tokio::test]
 async fn test_delete_record_idempotent() {
     let (records_arc, routes) = create_test_server().await;
-    
+
     // Get the test record ID
     let test_id = {
         let records = records_arc.read().await;
@@ -300,7 +301,7 @@ async fn test_delete_record_idempotent() {
         .path(&format!("/records/{}", test_id))
         .reply(&routes)
         .await;
-    
+
     assert_eq!(response.status(), 204);
 
     // Try to delete the same record again
@@ -309,10 +310,10 @@ async fn test_delete_record_idempotent() {
         .path(&format!("/records/{}", test_id))
         .reply(&routes)
         .await;
-    
+
     // Should return 404 since record no longer exists
     assert_eq!(response.status(), 404);
-    
+
     let body: ApiResponse<()> = serde_json::from_slice(response.body()).unwrap();
     assert!(!body.success);
     assert!(body.error.is_some());

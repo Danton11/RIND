@@ -1,13 +1,16 @@
+use serde_json::json;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::Filter;
-use serde_json::json;
-use std::net::Ipv4Addr;
 
-use rind::update::{DnsRecord, DnsRecords, CreateRecordRequest, ApiResponse};
+use rind::update::{ApiResponse, CreateRecordRequest, DnsRecord, DnsRecords};
 
 // Helper function to create a test server
-async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone) {
+async fn create_test_server() -> (
+    Arc<RwLock<DnsRecords>>,
+    impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone,
+) {
     let records = DnsRecords::new();
     let records_arc = Arc::new(RwLock::new(records));
     let records_filter = warp::any().map({
@@ -92,7 +95,7 @@ async fn create_test_server() -> (Arc<RwLock<DnsRecords>>, impl warp::Filter<Ext
         .and_then(get_record_handler);
 
     let routes = create_record_route.or(get_record_route);
-    
+
     (records_arc, routes)
 }
 
@@ -119,12 +122,12 @@ async fn test_post_record_success_with_all_fields() {
         .await;
 
     assert_eq!(response.status(), 201); // HTTP 201 Created
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(body.success);
     assert!(body.data.is_some());
-    
+
     let created_record = body.data.unwrap();
     assert_eq!(created_record.name, "test.example.com");
     assert_eq!(created_record.ip, Some(Ipv4Addr::new(192, 168, 1, 1)));
@@ -132,7 +135,7 @@ async fn test_post_record_success_with_all_fields() {
     assert_eq!(created_record.record_type, "A");
     assert_eq!(created_record.class, "IN");
     assert!(created_record.id.len() > 0); // Should have generated UUID
-    
+
     // Verify record was actually stored
     let records = records_arc.read().await;
     assert_eq!(records.len(), 1);
@@ -147,9 +150,9 @@ async fn test_post_record_success_with_defaults() {
     let create_request = CreateRecordRequest {
         name: "minimal.example.com".to_string(),
         ip: Some("10.0.0.1".to_string()),
-        ttl: None,        // Should default to 300
+        ttl: None,         // Should default to 300
         record_type: None, // Should default to "A"
-        class: None,      // Should default to "IN"
+        class: None,       // Should default to "IN"
         value: None,
     };
 
@@ -162,17 +165,17 @@ async fn test_post_record_success_with_defaults() {
         .await;
 
     assert_eq!(response.status(), 201);
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(body.success);
-    
+
     let created_record = body.data.unwrap();
     assert_eq!(created_record.name, "minimal.example.com");
     assert_eq!(created_record.ip, Some(Ipv4Addr::new(10, 0, 0, 1)));
-    assert_eq!(created_record.ttl, 300);      // Default TTL
+    assert_eq!(created_record.ttl, 300); // Default TTL
     assert_eq!(created_record.record_type, "A"); // Default type
-    assert_eq!(created_record.class, "IN");   // Default class
+    assert_eq!(created_record.class, "IN"); // Default class
 }
 
 #[tokio::test]
@@ -198,11 +201,11 @@ async fn test_post_record_cname_with_value() {
         .await;
 
     assert_eq!(response.status(), 201);
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(body.success);
-    
+
     let created_record = body.data.unwrap();
     assert_eq!(created_record.name, "www.example.com");
     assert_eq!(created_record.ip, None);
@@ -233,7 +236,7 @@ async fn test_post_record_validation_error_invalid_ip() {
         .await;
 
     assert_eq!(response.status(), 400); // Bad Request
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(!body.success);
@@ -264,7 +267,7 @@ async fn test_post_record_validation_error_missing_cname_value() {
         .await;
 
     assert_eq!(response.status(), 400); // Bad Request
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(!body.success);
@@ -315,13 +318,13 @@ async fn test_post_record_duplicate_error() {
         .await;
 
     assert_eq!(response2.status(), 409); // Conflict
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response2.body()).unwrap();
     assert!(!body.success);
     assert!(body.error.is_some());
     assert!(body.error.unwrap().contains("already exists"));
-    
+
     // Verify only one record exists
     let records = records_arc.read().await;
     assert_eq!(records.len(), 1);
@@ -350,7 +353,7 @@ async fn test_post_record_empty_name_validation() {
         .await;
 
     assert_eq!(response.status(), 400); // Bad Request
-    
+
     // Parse response
     let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
     assert!(!body.success);
