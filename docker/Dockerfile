@@ -10,15 +10,25 @@ RUN apt-get update && apt-get install -y \
 # Create app directory
 WORKDIR /app
 
-# Copy manifests
-COPY Cargo.toml ./
+# Copy manifests and lock file
+COPY Cargo.toml Cargo.lock ./
 
-# Copy source code
+# Build dependencies only (cached until Cargo.toml/Cargo.lock change)
+RUN mkdir src benches tests && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "pub fn lib() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/bin/add_records.rs && \
+    echo "fn main() {}" > src/bin/test_runner.rs && \
+    mkdir -p benches && echo "fn main() {}" > benches/dns_benchmarks.rs && \
+    cargo build --release && \
+    rm -rf src benches
+
+# Copy actual source code
 COPY src ./src
 COPY benches ./benches
 COPY tests ./tests
 
-# Build the application in release mode
+# Build the application (deps already cached)
 RUN cargo build --release
 
 # Build utilities
