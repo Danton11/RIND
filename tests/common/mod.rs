@@ -2,6 +2,8 @@
 // of these helpers; the rest get flagged as dead by that crate's lint pass.
 #![allow(dead_code)]
 
+pub mod harness;
+
 use async_trait::async_trait;
 use rind::update::{DatastoreError, DatastoreProvider, DnsRecord, DnsRecords};
 use std::sync::Mutex;
