@@ -2,11 +2,71 @@
 
 ## [Unreleased]
 
+- LMDB storage scaffolding: new `src/storage.rs` module with `LmdbStore`
+  handle backed by a heed environment. Five databases (`records`,
+  `records_by_name`, `zones`, `changelog`, `metadata`) opened atomically.
+  Transactional per-record CRUD with rolling FNV-1a-128 state hash for
+  drift detection, monotonically increasing version counter, and an
+  on-disk `schema_version` check that fails fast on mismatch.
+- Zone model groundwork: `Zone` struct mirroring SOA fields, zone CRUD
+  methods, and `find_zone_for()` longest-suffix matching so the query
+  path can answer AA/REFUSED correctly once zones are wired into the
+  query layer.
+- RFC 4343 compliance in the storage index: names are canonicalized
+  (ASCII lowercase, trailing dot stripped) on every write and lookup so
+  `EXAMPLE.com.` and `example.com` hit the same slot. Stored record
+  bodies keep their original case — case-preserving, case-insensitive.
+- New operator doc `docs/KUBERNETES.md` covering LMDB filesystem
+  requirements (block- vs file-level network storage, CSI driver check),
+  cross-architecture snapshot warning, map-size tuning, and StatefulSet
+  vs Deployment pod topology.
+- Configurable LMDB map size via `RIND_LMDB_MAP_SIZE` env var (default
+  1 GiB). Invalid values are a hard startup error — no silent fallback.
 - Moved Grafana credentials to environment variables (`.env`)
 - **Breaking**: DNS records now use a typed `RecordData` enum. A and AAAA records
   are both first-class; the wire-format query path filters on both name and
   qtype, returning NODATA (NOERROR, ANCOUNT=0) when a name exists but the
   requested type does not.
+- CNAME records: new `RecordData::Cname { target }` variant served over both
+  REST and UDP. Write path enforces RFC 2181 §10.1 — a name holding a CNAME
+  cannot hold any other record type, and vice versa (409 on conflict). Wire
+  encoder emits uncompressed target names per RFC 1035 §3.3.1.
+- PTR records: new `RecordData::Ptr { target }` variant (type code 12, RFC
+  1035 §3.3.12). Same wire shape as CNAME; no exclusivity rule, standard
+  singleton `(name, type)` semantics. Zone membership (in-addr.arpa /
+  ip6.arpa) is not enforced.
+- NS records and multi-value RRSet support: new `RecordData::Ns { target }`
+  variant (type code 2, RFC 1035 §3.3.11). Multiple NS records at the same
+  name are now permitted — this is the delegation set model required for
+  real DNS. The query path returns all matching records for a qtype, not
+  just the first, so `dig example.com NS` emits ANCOUNT=N. RFC 2181 §5.2
+  uniform-TTL rule enforced at read time via min-clamping across the RRSet.
+  RFC 2181 §5 RRSet-as-set invariant enforced at write time: exact-rdata
+  duplicates within an RRSet are rejected with 409.
+- **Breaking (internal API)**: `packet::build_response` signature changed
+  from `(query, Option<&RecordData>, u8, u32)` to `(query, &[(&RecordData,
+  u32)], u8)`. Per-answer TTL lives in the slice; empty slice means
+  NODATA/NXDOMAIN/FORMERR. Callers outside the crate (there are none in
+  tree) will need to update.
+- New write-path policy hook: `RecordData::allows_multiple()`. Returns
+  `true` for NS/MX/TXT, `false` for A/AAAA/CNAME/PTR. Flip the match arm
+  on A/AAAA to enable round-robin DNS if you want it.
+- MX records: new `RecordData::Mx { preference, exchange }` variant (type
+  code 15, RFC 1035 §3.3.9). First numeric rdata field — `preference` is
+  a `u16`. Multi-value: the usual primary + fallback pattern. Clients sort
+  by preference per RFC 974; server does not. Null MX (RFC 7505, exchange
+  = ".") is not currently supported — the name encoder doesn't handle
+  root-label names correctly.
+- TXT records: new `RecordData::Txt { strings }` variant (type code 16,
+  RFC 1035 §3.3.14). First collection rdata — `strings` is a `Vec<String>`,
+  each element a character-string emitted with a 1-byte length prefix on
+  the wire. Multi-value at the RRSet level. Two write-time validations:
+  empty `strings` Vec is rejected (degenerate record), and per-string
+  bytes are capped at 255 (RFC length-field limit). Users with longer
+  values split manually into multiple Vec entries.
+- New rdata-level validation hook: `RecordData::validate_rdata()` called
+  from `DnsRecord::validate`. Currently only TXT has rules; the seam is
+  there for SOA/SRV/CAA and the like.
 - **Breaking**: REST API payload shape flattened. `POST /records` now takes
   `{"name","ttl","class","type":"A"|"AAAA","ip"}`. `PUT /records/{id}` takes
   partial fields plus an optional nested `"data": {"type":..., "ip":...}` —

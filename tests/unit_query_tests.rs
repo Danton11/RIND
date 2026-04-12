@@ -8,11 +8,15 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 fn make_record(name: &str, data: RecordData) -> DnsRecord {
+    make_record_ttl(name, data, 300)
+}
+
+fn make_record_ttl(name: &str, data: RecordData, ttl: u32) -> DnsRecord {
     let now = Utc::now();
     DnsRecord {
         id: Uuid::new_v4().to_string(),
         name: name.to_string(),
-        ttl: 300,
+        ttl,
         class: "IN".to_string(),
         data,
         created_at: now,
@@ -109,21 +113,23 @@ async fn missing_name_returns_nxdomain() {
 
 #[tokio::test]
 async fn unsupported_qtype_on_existing_name_is_nodata() {
-    // MX (15) isn't served; name exists as A → NODATA, not NXDOMAIN.
+    // SRV (33) isn't served; name exists as A → NODATA, not NXDOMAIN.
+    // Exercises the `qtype_to_name` None branch specifically (vs. the
+    // known-qtype-no-match path which hits a different branch).
     let records = store(vec![make_record(
-        "mx.example.com",
+        "srv.example.com",
         RecordData::A {
             ip: Ipv4Addr::new(1, 2, 3, 4),
         },
     )]);
-    let (_response, rcode) = handle_query_with_code(query("mx.example.com", 15), records).await;
+    let (_response, rcode) = handle_query_with_code(query("srv.example.com", 33), records).await;
     assert_eq!(rcode, 0);
 }
 
 #[tokio::test]
 async fn unsupported_qtype_on_missing_name_is_nxdomain() {
     let records = store(vec![]);
-    let (_response, rcode) = handle_query_with_code(query("nope.example.com", 15), records).await;
+    let (_response, rcode) = handle_query_with_code(query("nope.example.com", 33), records).await;
     assert_eq!(rcode, 3);
 }
 
@@ -147,4 +153,76 @@ async fn both_a_and_aaaa_coexist_for_same_name() {
     let (_, aaaa_rcode) = handle_query_with_code(query("dual.example.com", 28), records).await;
     assert_eq!(a_rcode, 0);
     assert_eq!(aaaa_rcode, 0);
+}
+
+#[tokio::test]
+async fn ns_delegation_set_returns_all_records() {
+    // Two NS records at the same name = delegation set. A `dig example.com NS`
+    // must return both. ANCOUNT == 2.
+    let records = store(vec![
+        make_record(
+            "example.com",
+            RecordData::Ns {
+                target: "ns1.example.com".to_string(),
+            },
+        ),
+        make_record(
+            "example.com",
+            RecordData::Ns {
+                target: "ns2.example.com".to_string(),
+            },
+        ),
+    ]);
+    let (response, rcode) = handle_query_with_code(query("example.com", 2), records).await;
+    assert_eq!(rcode, 0);
+    assert_eq!(
+        u16::from_be_bytes([response[6], response[7]]),
+        2,
+        "RRSet of size 2 must produce ANCOUNT=2"
+    );
+}
+
+#[tokio::test]
+async fn ns_rrset_ttl_is_min_clamped() {
+    // RFC 2181 §5.2: all RRs in an RRSet must share a TTL. We store per-record
+    // TTLs and clamp to the min at read time. Two NS records with TTLs 100 and
+    // 500 should both be emitted with TTL=100.
+    let records = store(vec![
+        make_record_ttl(
+            "example.com",
+            RecordData::Ns {
+                target: "ns1.example.com".to_string(),
+            },
+            100,
+        ),
+        make_record_ttl(
+            "example.com",
+            RecordData::Ns {
+                target: "ns2.example.com".to_string(),
+            },
+            500,
+        ),
+    ]);
+    let (response, rcode) = handle_query_with_code(query("example.com", 2), records).await;
+    assert_eq!(rcode, 0);
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 2);
+
+    // Walk the response to both TTL fields and assert both equal 100.
+    //
+    // Layout after header(12) + question(qname + qtype(2) + qclass(2)):
+    //   answer[0]: ansname + type(2) + class(2) + ttl(4) + rdlen(2) + rdata
+    //   answer[1]: ansname + type(2) + class(2) + ttl(4) + rdlen(2) + rdata
+    //
+    // ansname for "example.com" is 1+7+1+3+1 = 13 bytes (7example3com0).
+    // Constant bits of an RR header: 13 + 2 + 2 + 4 + 2 = 23, then rdata.
+    // NS rdata for "nsN.example.com" = 1+3+1+7+1+3+1 = 17 bytes.
+    // So each answer RR is 23 + 17 = 40 bytes.
+    //
+    // Question echoes back "example.com" (13 bytes) + qtype(2) + qclass(2) = 17.
+    // Header = 12. First answer TTL lives at offset 12 + 17 + 13 + 2 + 2 = 46.
+    // Second answer TTL lives at 46 + 40 = 86.
+    let ttl1 = u32::from_be_bytes([response[46], response[47], response[48], response[49]]);
+    let ttl2 = u32::from_be_bytes([response[86], response[87], response[88], response[89]]);
+    assert_eq!(ttl1, 100, "first answer TTL must be min-clamped");
+    assert_eq!(ttl2, 100, "second answer TTL must be min-clamped");
 }

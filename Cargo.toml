@@ -24,6 +24,7 @@ hex = "0.4"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 thiserror = "1.0"
 async-trait = "0.1"
+heed = "0.20"
 
 [dev-dependencies]
 tempfile = "3"

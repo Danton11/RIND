@@ -182,17 +182,24 @@ class DNSCanary:
         self.metrics_port = metrics_port
         self.metrics = DNSCanaryMetrics()
         self.running = True
-        # (domain, qtype) — 1 = A, 28 = AAAA. Canary exercises both families so
-        # the query-path filtering + answer-section encoding both get covered.
+        # (domain, qtype). Canary exercises every served record type so the
+        # query-path filtering + answer-section encoding both get covered,
+        # and per-qtype dashboards show non-zero traffic across the board.
+        # Wire codes: 1=A, 2=NS, 5=CNAME, 12=PTR, 15=MX, 16=TXT, 28=AAAA.
         self.test_domains = [
             ('example.com', 1),
             ('google.com', 1),
             ('cloudflare.com', 1),
             ('v6.example.com', 28),
+            ('canary-cname.example.com', 5),
+            ('canary-ns.example.com', 2),
+            ('canary-mx.example.com', 15),
+            ('canary-txt.example.com', 16),
+            ('1.1.1.10.in-addr.arpa', 12),
         ]
         
     def test_dns_query(self, domain, qtype=1):
-        """Test a DNS query. qtype is the wire-format type code (1=A, 28=AAAA)."""
+        """Test a DNS query. qtype is the wire-format type code (1=A, 2=NS, 5=CNAME, 12=PTR, 15=MX, 16=TXT, 28=AAAA)."""
         try:
             start_time = time.time()
 
@@ -239,18 +246,47 @@ class DNSCanary:
             logger.debug(f"DNS query failed for {domain}: {e}")
             return False, response_time
     
-    # Per-type CRUD payloads. Keep A + AAAA here; extending this dict is how
+    # Per-type CRUD payloads. `create_rdata` is merged flat into the POST
+    # body; `update_rdata` is the nested data object sent to PUT (the server
+    # wraps it under `data: { type, ... }`). Extending this dict is how
     # future record types get picked up by the cycle.
     _CRUD_VARIANTS = {
         "A": {
             "name_suffix": "a.example.com",
-            "create_ip": "192.168.1.100",
-            "update_ip": "192.168.1.101",
+            "create_rdata": {"ip": "192.168.1.100"},
+            "update_rdata": {"ip": "192.168.1.101"},
         },
         "AAAA": {
             "name_suffix": "aaaa.example.com",
-            "create_ip": "2001:db8::100",
-            "update_ip": "2001:db8::101",
+            "create_rdata": {"ip": "2001:db8::100"},
+            "update_rdata": {"ip": "2001:db8::101"},
+        },
+        "CNAME": {
+            "name_suffix": "cname.example.com",
+            "create_rdata": {"target": "canary-target-v1.example.com"},
+            "update_rdata": {"target": "canary-target-v2.example.com"},
+        },
+        "PTR": {
+            # Non-colliding reverse name; unique per cycle via the timestamp
+            # prefix so multiple canary runs don't trip the singleton rule.
+            "name_suffix": "100.1.1.10.in-addr.arpa",
+            "create_rdata": {"target": "canary-host-v1.example.com"},
+            "update_rdata": {"target": "canary-host-v2.example.com"},
+        },
+        "NS": {
+            "name_suffix": "ns.example.com",
+            "create_rdata": {"target": "ns1-canary.example.com"},
+            "update_rdata": {"target": "ns2-canary.example.com"},
+        },
+        "MX": {
+            "name_suffix": "mx.example.com",
+            "create_rdata": {"preference": 10, "exchange": "mx1-canary.example.com"},
+            "update_rdata": {"preference": 20, "exchange": "mx2-canary.example.com"},
+        },
+        "TXT": {
+            "name_suffix": "txt.example.com",
+            "create_rdata": {"strings": ["canary v1"]},
+            "update_rdata": {"strings": ["canary v2"]},
         },
     }
 
@@ -287,7 +323,7 @@ class DNSCanary:
             "ttl": 300,
             "class": "IN",
             "type": record_type,
-            "ip": variant["create_ip"],
+            **variant["create_rdata"],
         }
 
         create_response = requests.post(
@@ -314,11 +350,11 @@ class DNSCanary:
             logger.warning(f"Get {record_type} record failed: {get_response.status_code}")
             return False
 
-        # PUT — swap in a new IP via the nested `data` field so we exercise
+        # PUT — swap in new rdata via the nested `data` field so we exercise
         # the typed update path, not just a ttl-only partial update.
         update_payload = {
             "ttl": 600,
-            "data": {"type": record_type, "ip": variant["update_ip"]},
+            "data": {"type": record_type, **variant["update_rdata"]},
         }
         update_response = requests.put(
             get_url,
@@ -353,13 +389,25 @@ class DNSCanary:
             {"name": "google.com", "ttl": 300, "class": "IN", "type": "A", "ip": "142.250.80.46"},
             {"name": "cloudflare.com", "ttl": 300, "class": "IN", "type": "A", "ip": "104.16.132.229"},
             {"name": "v6.example.com", "ttl": 300, "class": "IN", "type": "AAAA", "ip": "2001:db8::1"},
+            # New-type probes. Names chosen to not collide with each other
+            # or with the CRUD-cycle names (those use a timestamp prefix).
+            {"name": "canary-cname.example.com", "ttl": 300, "class": "IN",
+             "type": "CNAME", "target": "canary-target.example.com"},
+            {"name": "canary-ns.example.com", "ttl": 300, "class": "IN",
+             "type": "NS", "target": "ns1-canary.example.com"},
+            {"name": "canary-mx.example.com", "ttl": 300, "class": "IN",
+             "type": "MX", "preference": 10, "exchange": "mail-canary.example.com"},
+            {"name": "canary-txt.example.com", "ttl": 300, "class": "IN",
+             "type": "TXT", "strings": ["canary monitor"]},
+            {"name": "1.1.1.10.in-addr.arpa", "ttl": 300, "class": "IN",
+             "type": "PTR", "target": "canary-host.example.com"},
         ]
         url = f"http://{self.api_server}:{self.api_port}/records"
         for record in seed_records:
             try:
                 resp = requests.post(url, json=record, timeout=5, headers={'Content-Type': 'application/json'})
                 if resp.status_code == 201:
-                    logger.info(f"Seeded record: {record['name']} -> {record['ip']}")
+                    logger.info(f"Seeded record: {record['name']} ({record['type']})")
                 elif resp.status_code == 409:
                     logger.info(f"Record already exists: {record['name']}")
                 else:
@@ -378,7 +426,10 @@ class DNSCanary:
                     success, response_time = self.test_dns_query(domain, qtype)
                     self.metrics.record_dns_query(success, response_time)
 
-                    type_name = {1: "A", 28: "AAAA"}.get(qtype, str(qtype))
+                    type_name = {
+                        1: "A", 2: "NS", 5: "CNAME", 12: "PTR",
+                        15: "MX", 16: "TXT", 28: "AAAA",
+                    }.get(qtype, str(qtype))
                     if success:
                         logger.debug(f"DNS {type_name} query for {domain}: {response_time:.3f}s")
                     else:

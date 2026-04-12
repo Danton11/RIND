@@ -82,7 +82,7 @@ fn test_build_response_basic() {
     let data = RecordData::A {
         ip: Ipv4Addr::new(1, 2, 3, 4),
     };
-    let response = build_response(query, Some(&data), 0, 60);
+    let response = build_response(query, &[(&data, 60)], 0);
     assert!(response.len() > 20);
     assert_eq!(response[0], 0x12);
     assert_eq!(response[1], 0x34);
@@ -94,7 +94,7 @@ fn test_build_response_a_record_rdata() {
     let data = RecordData::A {
         ip: Ipv4Addr::new(10, 0, 0, 7),
     };
-    let response = build_response(query, Some(&data), 0, 60);
+    let response = build_response(query, &[(&data, 60)], 0);
 
     // QR=1 set in flags
     assert_eq!(response[2] & 0x80, 0x80);
@@ -116,7 +116,7 @@ fn test_build_response_aaaa_record_rdata() {
     let query = make_query("v6.example.com", 28);
     let ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
     let data = RecordData::Aaaa { ip };
-    let response = build_response(query, Some(&data), 0, 60);
+    let response = build_response(query, &[(&data, 60)], 0);
 
     // ANCOUNT == 1
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
@@ -133,10 +133,163 @@ fn test_build_response_aaaa_record_rdata() {
 }
 
 #[test]
+fn test_build_response_cname_record_rdata() {
+    let query = make_query("alias.example.com", 5);
+    let data = RecordData::Cname {
+        target: "canonical.example.com".to_string(),
+    };
+    let response = build_response(query, &[(&data, 60)], 0);
+
+    // ANCOUNT == 1
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+
+    // Expected wire encoding of the target: 9canonical7example3com0 = 23 bytes.
+    let expected: Vec<u8> = vec![
+        9, b'c', b'a', b'n', b'o', b'n', b'i', b'c', b'a', b'l', 7, b'e', b'x', b'a', b'm', b'p',
+        b'l', b'e', 3, b'c', b'o', b'm', 0,
+    ];
+    assert_eq!(expected.len(), 23);
+
+    let opt_tail = 11;
+    let rdata_end = response.len() - opt_tail;
+    let rdata = &response[rdata_end - expected.len()..rdata_end];
+    assert_eq!(rdata, expected.as_slice());
+    let rdlen = u16::from_be_bytes([
+        response[rdata_end - expected.len() - 2],
+        response[rdata_end - expected.len() - 1],
+    ]);
+    assert_eq!(rdlen, expected.len() as u16);
+}
+
+#[test]
+fn test_build_response_ptr_record_rdata() {
+    let query = make_query("1.1.168.192.in-addr.arpa", 12);
+    let data = RecordData::Ptr {
+        target: "host.example.com".to_string(),
+    };
+    let response = build_response(query, &[(&data, 60)], 0);
+
+    // ANCOUNT == 1
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+
+    // Wire encoding of "host.example.com": 4host7example3com0 = 18 bytes.
+    let expected: Vec<u8> = vec![
+        4, b'h', b'o', b's', b't', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o',
+        b'm', 0,
+    ];
+    assert_eq!(expected.len(), 18);
+
+    let opt_tail = 11;
+    let rdata_end = response.len() - opt_tail;
+    let rdata = &response[rdata_end - expected.len()..rdata_end];
+    assert_eq!(rdata, expected.as_slice());
+    let rdlen = u16::from_be_bytes([
+        response[rdata_end - expected.len() - 2],
+        response[rdata_end - expected.len() - 1],
+    ]);
+    assert_eq!(rdlen, expected.len() as u16);
+
+    // Answer TYPE field should be 12 (PTR). Walk forward from header:
+    // header(12) + qname + qtype(2) + qclass(2) + ansname + anstype(2).
+    // Easier: the anstype(2) sits at offset `rdata_end - expected.len() - 10`
+    // (rdlen(2) + ttl(4) + class(2) + type(2) before rdata).
+    let type_off = rdata_end - expected.len() - 10;
+    let ans_type = u16::from_be_bytes([response[type_off], response[type_off + 1]]);
+    assert_eq!(ans_type, 12);
+}
+
+#[test]
+fn test_build_response_mx_record_rdata() {
+    let query = make_query("example.com", 15);
+    let data = RecordData::Mx {
+        preference: 10,
+        exchange: "mail.example.com".to_string(),
+    };
+    let response = build_response(query, &[(&data, 60)], 0);
+
+    // ANCOUNT == 1
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+
+    // Expected RDATA: 2-byte preference (0x00 0x0A) + encoded exchange.
+    // "mail.example.com" encodes to 4mail7example3com0 = 18 bytes.
+    let mut expected: Vec<u8> = vec![0x00, 0x0A];
+    expected.extend_from_slice(&[
+        4, b'm', b'a', b'i', b'l', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o',
+        b'm', 0,
+    ]);
+    assert_eq!(expected.len(), 20);
+
+    let opt_tail = 11;
+    let rdata_end = response.len() - opt_tail;
+    let rdata = &response[rdata_end - expected.len()..rdata_end];
+    assert_eq!(rdata, expected.as_slice());
+    let rdlen = u16::from_be_bytes([
+        response[rdata_end - expected.len() - 2],
+        response[rdata_end - expected.len() - 1],
+    ]);
+    assert_eq!(rdlen, expected.len() as u16);
+
+    // Answer TYPE should be 15 (MX).
+    let type_off = rdata_end - expected.len() - 10;
+    let ans_type = u16::from_be_bytes([response[type_off], response[type_off + 1]]);
+    assert_eq!(ans_type, 15);
+}
+
+#[test]
+fn test_build_response_txt_record_rdata_single_string() {
+    let query = make_query("txt.example.com", 16);
+    let data = RecordData::Txt {
+        strings: vec!["v=spf1 -all".to_string()],
+    };
+    let response = build_response(query, &[(&data, 60)], 0);
+
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+
+    // Expected RDATA: 1-byte length (11) + "v=spf1 -all" = 12 bytes.
+    let mut expected: Vec<u8> = vec![11];
+    expected.extend_from_slice(b"v=spf1 -all");
+    assert_eq!(expected.len(), 12);
+
+    let opt_tail = 11;
+    let rdata_end = response.len() - opt_tail;
+    let rdata = &response[rdata_end - expected.len()..rdata_end];
+    assert_eq!(rdata, expected.as_slice());
+    let rdlen = u16::from_be_bytes([
+        response[rdata_end - expected.len() - 2],
+        response[rdata_end - expected.len() - 1],
+    ]);
+    assert_eq!(rdlen, 12);
+}
+
+#[test]
+fn test_build_response_txt_record_rdata_multi_string() {
+    // TXT with multiple character-strings. RDLENGTH = sum of (1 + len).
+    let query = make_query("txt.example.com", 16);
+    let data = RecordData::Txt {
+        strings: vec!["abc".to_string(), "de".to_string()],
+    };
+    let response = build_response(query, &[(&data, 60)], 0);
+
+    // Expected RDATA: [3,a,b,c,2,d,e] = 7 bytes.
+    let expected: Vec<u8> = vec![3, b'a', b'b', b'c', 2, b'd', b'e'];
+    assert_eq!(expected.len(), 7);
+
+    let opt_tail = 11;
+    let rdata_end = response.len() - opt_tail;
+    let rdata = &response[rdata_end - expected.len()..rdata_end];
+    assert_eq!(rdata, expected.as_slice());
+    let rdlen = u16::from_be_bytes([
+        response[rdata_end - expected.len() - 2],
+        response[rdata_end - expected.len() - 1],
+    ]);
+    assert_eq!(rdlen, 7);
+}
+
+#[test]
 fn test_build_response_nodata_empty_answer() {
     // NODATA: NOERROR (rcode=0) but no answer record → ANCOUNT == 0.
     let query = make_query("a.com", 28);
-    let response = build_response(query, None, 0, 60);
+    let response = build_response(query, &[], 0);
     // QR=1, rcode low nibble of byte 3 == 0
     assert_eq!(response[2] & 0x80, 0x80);
     assert_eq!(response[3] & 0x0f, 0);
@@ -147,7 +300,7 @@ fn test_build_response_nodata_empty_answer() {
 #[test]
 fn test_build_response_nxdomain_rcode() {
     let query = make_query("nope.example", 1);
-    let response = build_response(query, None, 3, 60);
+    let response = build_response(query, &[], 3);
     // rcode low nibble == 3 (NXDOMAIN)
     assert_eq!(response[3] & 0x0f, 3);
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);

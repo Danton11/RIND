@@ -54,12 +54,9 @@ fn bench_response_building(c: &mut Criterion) {
 
     c.bench_function("build_dns_response", |b| {
         b.iter(|| {
-            let response = build_response(
-                black_box(query.clone()),
-                black_box(Some(&data)),
-                black_box(0),
-                black_box(300),
-            );
+            let answers: &[(&RecordData, u32)] = &[(&data, 300)];
+            let response =
+                build_response(black_box(query.clone()), black_box(answers), black_box(0));
             black_box(response)
         })
     });
