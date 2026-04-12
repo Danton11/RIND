@@ -2,10 +2,11 @@
 //!
 //! # Architecture
 //!
-//! Each RIND process owns a single LMDB environment containing four databases:
+//! Each RIND process owns a single LMDB environment containing five databases:
 //!
 //! - `records` — authoritative record store, keyed by UUID
 //! - `records_by_name` — secondary index keyed by `name\0type_be\0uuid`
+//! - `zones` — authoritative zone metadata (SOA fields), keyed by zone name
 //! - `changelog` — versioned mutation log, keyed by `u64_be` version
 //! - `metadata` — env-level state (schema version, current version, rolling
 //!   state hash)
@@ -118,7 +119,7 @@ pub enum OpKind {
 }
 
 /// A single record mutation. Multiple ops may share one changelog entry when
-/// they were committed together (bulk operations — see impl-plan 6.4).
+/// they were committed together (bulk writes produce one entry with N ops).
 ///
 /// For `Create` and `Update`, `record` carries the post-mutation state. For
 /// `Delete`, `record` is `None` and `record_id` identifies the removed row.
@@ -191,14 +192,14 @@ pub struct LmdbStore {
     records: Database<Bytes, Bytes>,
     records_by_name: Database<Bytes, Bytes>,
     zones: Database<Bytes, Bytes>,
-    #[allow(dead_code)] // written by 2.3 (changelog)
+    #[allow(dead_code)] // populated once changelog writes are wired in
     changelog: Database<Bytes, Bytes>,
     metadata: Database<Bytes, Bytes>,
 }
 
 impl LmdbStore {
     /// Open (or create) an LMDB environment at `path` and return a handle
-    /// with all four databases ready for use.
+    /// with all five databases ready for use.
     ///
     /// On first open the metadata db is seeded with `schema_version =
     /// SCHEMA_VERSION`, `current_version = 0`, and a zeroed state hash. On
@@ -292,7 +293,8 @@ impl LmdbStore {
     }
 
     /// The rolling FNV1a-XOR hash of the full record set at
-    /// `current_version()`. Used by drift detection metrics in phase 4.
+    /// `current_version()`. Used by drift-detection metrics that compare
+    /// replicas against each other without streaming full state.
     ///
     /// This is not collision-resistant against an adversary — it's designed
     /// to detect replication bugs, bit rot, and out-of-band writes, not to
@@ -417,8 +419,8 @@ impl LmdbStore {
     /// Fetch the first record with a given (name, type), or `None` if the
     /// index is empty at that prefix. Used by the duplicate check on
     /// create/update for types where the write path enforces singleton
-    /// semantics — do **not** call this for MX/NS/TXT once those land, use
-    /// [`find_records_by_name_and_type`] instead.
+    /// semantics. Do **not** call this for multi-value types (NS/MX/TXT) —
+    /// use [`find_records_by_name_and_type`] instead.
     pub fn find_first_by_name_and_type(
         &self,
         name: &str,
@@ -646,13 +648,6 @@ fn resolve_map_size() -> Result<usize, StorageError> {
     }
 }
 
-/// Encode the compound key for `records_by_name`: `name \0 type_be \0 uuid`.
-///
-/// The NUL separators mean a prefix scan on `name\0` returns every record
-/// for that name in one contiguous range, and within that range the
-/// type-code ordering groups A before AAAA. Hand-rolled rather than using a
-/// delimiter-encoding scheme because UUIDs and DNS names never contain NUL
-/// bytes, so there's nothing to escape.
 /// Canonicalize a DNS name per RFC 4343: lowercase (ASCII only, per
 /// §2.1 — non-ASCII never appears in wire-format DNS names) and strip any
 /// trailing `.` so `example.com.` and `example.com` hash to the same slot.
@@ -677,6 +672,13 @@ pub(crate) fn encode_name_type_prefix(name: &str, type_code: u16) -> Vec<u8> {
     prefix
 }
 
+/// Encode the compound key for `records_by_name`: `name \0 type_be \0 uuid`.
+///
+/// The NUL separators mean a prefix scan on `name\0` returns every record
+/// for that name in one contiguous range, and within that range the
+/// type-code ordering groups A before AAAA. Hand-rolled rather than using a
+/// delimiter-encoding scheme because UUIDs and DNS names never contain NUL
+/// bytes, so there's nothing to escape.
 pub(crate) fn encode_name_key(name: &str, type_code: u16, record_id: &str) -> Vec<u8> {
     let canon = canonical_name(name);
     let mut key = Vec::with_capacity(canon.len() + 1 + 2 + 1 + record_id.len());
@@ -821,8 +823,8 @@ mod tests {
     #[test]
     fn find_records_by_name_and_type_returns_all_matches() {
         // Bypass the singleton-style write path by constructing the index
-        // entries directly — simulates a future multi-value type like MX
-        // where two rows legitimately share (name, type).
+        // entries directly — exercises the multi-value read path where two
+        // rows legitimately share (name, type).
         let (_dir, store) = tmpstore();
         let r1 = rec(
             "multi.example.com",

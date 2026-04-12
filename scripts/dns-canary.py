@@ -199,7 +199,7 @@ class DNSCanary:
         ]
         
     def test_dns_query(self, domain, qtype=1):
-        """Test a DNS query. qtype is the wire-format type code (1=A, 28=AAAA)."""
+        """Test a DNS query. qtype is the wire-format type code (1=A, 2=NS, 5=CNAME, 12=PTR, 15=MX, 16=TXT, 28=AAAA)."""
         try:
             start_time = time.time()
 

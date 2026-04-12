@@ -451,6 +451,83 @@ pub fn save_records_to_file(file_path: &str, records: &DnsRecords) -> Result<(),
     Ok(())
 }
 
+/// Outcome of the shared conflict check between `create_record` and
+/// `update_record`. Carries both the metric-label reason and the caller-
+/// facing error so both call sites stay in sync.
+enum RrsetConflict {
+    CnameExclusivity,
+    SingletonDuplicate,
+    RrsetDuplicate,
+}
+
+impl RrsetConflict {
+    fn reason_label(&self) -> &'static str {
+        match self {
+            RrsetConflict::CnameExclusivity => "cname_conflict",
+            RrsetConflict::SingletonDuplicate => "duplicate_record",
+            RrsetConflict::RrsetDuplicate => "rrset_duplicate",
+        }
+    }
+
+    fn into_error(self, candidate: &DnsRecord) -> RecordError {
+        match self {
+            RrsetConflict::CnameExclusivity => RecordError::DuplicateRecord(format!(
+                "CNAME at '{}' conflicts with existing record (RFC 2181 §10.1)",
+                candidate.name
+            )),
+            RrsetConflict::SingletonDuplicate => RecordError::DuplicateRecord(format!(
+                "Record with name '{}' and type '{}' already exists",
+                candidate.name,
+                candidate.data.type_name()
+            )),
+            RrsetConflict::RrsetDuplicate => RecordError::DuplicateRecord(format!(
+                "RRSet for '{}' {} already contains this rdata (RFC 2181 §5)",
+                candidate.name,
+                candidate.data.type_name()
+            )),
+        }
+    }
+}
+
+/// Check a candidate record against the live set for RFC 2181 conflicts.
+///
+/// Three rules fire, in order:
+///   1. §10.1 CNAME exclusivity: a name holding a CNAME can hold nothing else.
+///   2. Singleton types (A, AAAA, CNAME, PTR) reject any second record with
+///      the same `(name, type)`.
+///   3. Multi-value types (NS, MX, TXT) reject only exact-rdata duplicates —
+///      §5 says an RRSet is a set, not a bag.
+///
+/// `exclude_id` skips the given record — used by `update_record` so a record
+/// does not conflict with its own pre-update state.
+fn check_rrset_conflict(
+    existing: &DnsRecords,
+    candidate: &DnsRecord,
+    exclude_id: Option<&str>,
+) -> Result<(), RrsetConflict> {
+    for (other_id, other) in existing.iter() {
+        if Some(other_id.as_str()) == exclude_id {
+            continue;
+        }
+        if other.name != candidate.name {
+            continue;
+        }
+        if other.data.is_cname() || candidate.data.is_cname() {
+            return Err(RrsetConflict::CnameExclusivity);
+        }
+        if other.data.type_name() != candidate.data.type_name() {
+            continue;
+        }
+        if !candidate.data.allows_multiple() {
+            return Err(RrsetConflict::SingletonDuplicate);
+        }
+        if other.data == candidate.data {
+            return Err(RrsetConflict::RrsetDuplicate);
+        }
+    }
+    Ok(())
+}
+
 // ---------- CRUD ----------
 
 /// Create a new DNS record.
@@ -473,49 +550,11 @@ pub async fn create_record(
 
     let mut records_guard = records.write().await;
 
-    // Conflict check — three rules fire here, in order:
-    //
-    //   1. RFC 2181 §10.1 CNAME exclusivity: a name holding a CNAME can hold
-    //      nothing else, and vice versa.
-    //   2. Singleton types (A, AAAA, CNAME, PTR) reject any second record
-    //      with the same `(name, type)`.
-    //   3. Multi-value types (NS, later MX/TXT) reject only exact-rdata
-    //      duplicates — RFC 2181 §5 says an RRSet is a set, not a bag.
-    for existing_record in records_guard.values() {
-        if existing_record.name != new_record.name {
-            continue;
-        }
-        if existing_record.data.is_cname() || new_record.data.is_cname() {
-            let error = RecordError::DuplicateRecord(format!(
-                "CNAME at '{}' conflicts with existing record (RFC 2181 §10.1)",
-                new_record.name
-            ));
-            record_failure(&metrics_registry, "create", "cname_conflict", start_time).await;
-            return Err(error);
-        }
-        if existing_record.data.type_name() != new_record.data.type_name() {
-            continue;
-        }
-        // Same (name, type). Duplicate policy branches on whether this type
-        // permits multi-value RRSets.
-        if !new_record.data.allows_multiple() {
-            let error = RecordError::DuplicateRecord(format!(
-                "Record with name '{}' and type '{}' already exists",
-                new_record.name,
-                new_record.data.type_name()
-            ));
-            record_failure(&metrics_registry, "create", "duplicate_record", start_time).await;
-            return Err(error);
-        }
-        if existing_record.data == new_record.data {
-            let error = RecordError::DuplicateRecord(format!(
-                "RRSet for '{}' {} already contains this rdata (RFC 2181 §5)",
-                new_record.name,
-                new_record.data.type_name()
-            ));
-            record_failure(&metrics_registry, "create", "rrset_duplicate", start_time).await;
-            return Err(error);
-        }
+    if let Err(conflict) = check_rrset_conflict(&records_guard, &new_record, None) {
+        let label = conflict.reason_label();
+        let error = conflict.into_error(&new_record);
+        record_failure(&metrics_registry, "create", label, start_time).await;
+        return Err(error);
     }
 
     let record_id = new_record.id.clone();
@@ -684,39 +723,11 @@ pub async fn update_record(
         return Err(RecordError::ValidationError(validation_error));
     }
 
-    // Conflict check (excluding the current record): same three rules as
-    // create_record — CNAME exclusivity, singleton `(name, type)` rejection,
-    // multi-value exact-rdata rejection (RRSet is a set per RFC 2181 §5).
-    for (other_id, other_record) in records_guard.iter() {
-        if other_id == id || other_record.name != existing_record.name {
-            continue;
-        }
-        if other_record.data.is_cname() || existing_record.data.is_cname() {
-            record_failure(&metrics_registry, "update", "cname_conflict", start_time).await;
-            return Err(RecordError::DuplicateRecord(format!(
-                "CNAME at '{}' conflicts with existing record (RFC 2181 §10.1)",
-                existing_record.name
-            )));
-        }
-        if other_record.data.type_name() != existing_record.data.type_name() {
-            continue;
-        }
-        if !existing_record.data.allows_multiple() {
-            record_failure(&metrics_registry, "update", "duplicate_record", start_time).await;
-            return Err(RecordError::DuplicateRecord(format!(
-                "Record with name '{}' and type '{}' already exists",
-                existing_record.name,
-                existing_record.data.type_name()
-            )));
-        }
-        if other_record.data == existing_record.data {
-            record_failure(&metrics_registry, "update", "rrset_duplicate", start_time).await;
-            return Err(RecordError::DuplicateRecord(format!(
-                "RRSet for '{}' {} already contains this rdata (RFC 2181 §5)",
-                existing_record.name,
-                existing_record.data.type_name()
-            )));
-        }
+    if let Err(conflict) = check_rrset_conflict(&records_guard, &existing_record, Some(id)) {
+        let label = conflict.reason_label();
+        let error = conflict.into_error(&existing_record);
+        record_failure(&metrics_registry, "update", label, start_time).await;
+        return Err(error);
     }
 
     existing_record.touch();

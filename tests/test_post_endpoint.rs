@@ -5,7 +5,7 @@ use warp::Filter;
 
 use rind::update::{
     ApiResponse, CreateRecordRequest, DatastoreProvider, DnsRecord, DnsRecords,
-    JsonlFileDatastoreProvider, RecordData,
+    JsonlFileDatastoreProvider, RecordData, UpdateRecordRequest,
 };
 
 async fn create_test_server() -> (
@@ -86,6 +86,36 @@ async fn create_test_server() -> (
         }
     }
 
+    async fn update_record_handler(
+        id: String,
+        update_request: UpdateRecordRequest,
+        records: Arc<RwLock<DnsRecords>>,
+        datastore: Arc<dyn DatastoreProvider>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        match rind::update::update_record(records, datastore, &id, update_request, None).await {
+            Ok(record) => {
+                let response = ApiResponse::success(record);
+                Ok(warp::reply::with_status(
+                    warp::reply::json(&response),
+                    warp::http::StatusCode::OK,
+                ))
+            }
+            Err(e) => {
+                let response = ApiResponse::<DnsRecord>::error(e.to_string());
+                let status_code = match e.to_status_code() {
+                    404 => warp::http::StatusCode::NOT_FOUND,
+                    400 => warp::http::StatusCode::BAD_REQUEST,
+                    409 => warp::http::StatusCode::CONFLICT,
+                    _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                Ok(warp::reply::with_status(
+                    warp::reply::json(&response),
+                    status_code,
+                ))
+            }
+        }
+    }
+
     let create_record_route = warp::path("records")
         .and(warp::path::end())
         .and(warp::post())
@@ -101,7 +131,19 @@ async fn create_test_server() -> (
         .and(records_filter.clone())
         .and_then(get_record_handler);
 
-    let routes = create_record_route.or(get_record_route).boxed();
+    let update_record_route = warp::path("records")
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(records_filter.clone())
+        .and(datastore_filter.clone())
+        .and_then(update_record_handler);
+
+    let routes = create_record_route
+        .or(get_record_route)
+        .or(update_record_route)
+        .boxed();
 
     (records_arc, routes)
 }
@@ -621,4 +663,275 @@ async fn test_post_record_missing_type_is_rejected() {
         .await;
 
     assert_eq!(response.status(), 400);
+}
+
+// ---------- PUT / update tests for new record types ----------
+
+async fn create_and_get_id(
+    routes: &(impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone + 'static),
+    body: serde_json::Value,
+) -> String {
+    let response = warp::test::request()
+        .method("POST")
+        .path("/records")
+        .json(&body)
+        .reply(routes)
+        .await;
+    assert_eq!(response.status(), 201);
+    let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
+    body.data.unwrap().id
+}
+
+#[tokio::test]
+async fn test_put_cname_target_update() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "alias.example.com",
+            "type": "CNAME",
+            "target": "old.example.com"
+        }),
+    )
+    .await;
+
+    let body = serde_json::json!({
+        "data": { "type": "CNAME", "target": "new.example.com" }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id))
+        .json(&body)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(
+        body.data.unwrap().data,
+        RecordData::Cname {
+            target: "new.example.com".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_put_ptr_target_update() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "1.1.1.10.in-addr.arpa",
+            "type": "PTR",
+            "target": "host1.example.com"
+        }),
+    )
+    .await;
+
+    let body = serde_json::json!({
+        "data": { "type": "PTR", "target": "host2.example.com" }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id))
+        .json(&body)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(
+        body.data.unwrap().data,
+        RecordData::Ptr {
+            target: "host2.example.com".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_put_ns_rdata_rewrite_succeeds() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id1 = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "NS",
+            "target": "ns1.example.com"
+        }),
+    )
+    .await;
+    let _id2 = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "NS",
+            "target": "ns2.example.com"
+        }),
+    )
+    .await;
+
+    // Rewrite id1 to a fresh, non-duplicate target — different rdata from id2.
+    let body = serde_json::json!({
+        "data": { "type": "NS", "target": "ns3.example.com" }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id1))
+        .json(&body)
+        .reply(&routes)
+        .await;
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn test_put_ns_rrset_duplicate_rejected() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id1 = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "NS",
+            "target": "ns1.example.com"
+        }),
+    )
+    .await;
+    let _id2 = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "NS",
+            "target": "ns2.example.com"
+        }),
+    )
+    .await;
+
+    // Change id1 to match id2's rdata — RFC 2181 §5 violation.
+    let body = serde_json::json!({
+        "data": { "type": "NS", "target": "ns2.example.com" }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id1))
+        .json(&body)
+        .reply(&routes)
+        .await;
+    assert_eq!(response.status(), 409);
+}
+
+#[tokio::test]
+async fn test_put_mx_preference_update() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "MX",
+            "preference": 10,
+            "exchange": "mail.example.com"
+        }),
+    )
+    .await;
+
+    let body = serde_json::json!({
+        "data": { "type": "MX", "preference": 20, "exchange": "mail.example.com" }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id))
+        .json(&body)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(
+        body.data.unwrap().data,
+        RecordData::Mx {
+            preference: 20,
+            exchange: "mail.example.com".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_put_txt_strings_update() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    let id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "example.com",
+            "type": "TXT",
+            "strings": ["v=spf1 -all"]
+        }),
+    )
+    .await;
+
+    let body = serde_json::json!({
+        "data": { "type": "TXT", "strings": ["v=spf1 include:_spf.example.com -all"] }
+    });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", id))
+        .json(&body)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body: ApiResponse<DnsRecord> = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(
+        body.data.unwrap().data,
+        RecordData::Txt {
+            strings: vec!["v=spf1 include:_spf.example.com -all".to_string()]
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_put_cname_exclusivity_enforced_on_rename() {
+    let (_records_arc, routes) = create_test_server().await;
+
+    // Plain A record.
+    let a_id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "foo.example.com",
+            "type": "A",
+            "ip": "1.2.3.4"
+        }),
+    )
+    .await;
+
+    // CNAME at a different name — rename onto the A's name and expect 409.
+    let cname_id = create_and_get_id(
+        &routes,
+        serde_json::json!({
+            "name": "other.example.com",
+            "type": "CNAME",
+            "target": "bar.example.com"
+        }),
+    )
+    .await;
+
+    let body = serde_json::json!({ "name": "foo.example.com" });
+    let response = warp::test::request()
+        .method("PUT")
+        .path(&format!("/records/{}", cname_id))
+        .json(&body)
+        .reply(&routes)
+        .await;
+    assert_eq!(response.status(), 409);
+
+    // Sanity: the A record is still reachable.
+    let response = warp::test::request()
+        .method("GET")
+        .path(&format!("/records/{}", a_id))
+        .reply(&routes)
+        .await;
+    assert_eq!(response.status(), 200);
 }

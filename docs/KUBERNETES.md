@@ -1,7 +1,7 @@
 # Running RIND on Kubernetes
 
 This doc is a stub. The full k8s story (Helm chart, MetalLB, HPA, source-IP
-preservation) lives in the impl plan and will be filled in as those tasks land.
+preservation) will be filled in as that work lands.
 
 The one thing worth documenting now, because it's a footgun at deploy time
 rather than at development time, is the storage layer.
@@ -45,8 +45,8 @@ kubectl get storageclass -o custom-columns=NAME:.metadata.name,PROVISIONER:.prov
 Once the control-plane/data-plane split lands:
 
 - **Control plane** — `StatefulSet` with a PVC on a block StorageClass. This
-  is the authoritative source of truth. One replica (leader election in a
-  later phase if HA is needed).
+  is the authoritative source of truth. One replica (leader election can be
+  added later if HA is needed).
 - **DNS nodes** — `Deployment` with `emptyDir`. On pod start, each node
   bootstraps its LMDB from the control plane's sync API. Pod restart → empty
   disk → re-sync. Makes DNS nodes cattle, not pets, and unblocks HPA.
