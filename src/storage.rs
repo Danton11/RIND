@@ -1,3 +1,9 @@
+// `main.rs` declares `mod storage;` but only calls a handful of methods, so
+// the bin crate's dead_code analysis flags the rest. The lib crate (used by
+// tests) exercises them fine. Drop this attribute once main.rs is converted
+// to consume `librind` instead of re-declaring modules.
+#![allow(dead_code)]
+
 //! LMDB-backed storage for DNS records and the replication changelog.
 //!
 //! # Architecture

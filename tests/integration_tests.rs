@@ -67,11 +67,10 @@ async fn add_dns_record_via_api(
     let client = reqwest::Client::new();
     let record = serde_json::json!({
         "name": name,
-        "ip": ip,
         "ttl": 300,
-        "record_type": "A",
         "class": "IN",
-        "value": null
+        "type": "A",
+        "ip": ip,
     });
 
     let response = client

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use log::{error, info};
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -10,12 +11,17 @@ mod metrics;
 mod packet;
 mod query;
 mod server;
+mod storage;
 mod update;
 
-// Get data directory from environment or use current directory as fallback
-fn get_dns_records_file() -> String {
+/// Directory that holds the LMDB environment. `RIND_LMDB_PATH` wins;
+/// otherwise we fall back to `$DATA_DIR/lmdb`, then `./lmdb`.
+fn get_lmdb_path() -> PathBuf {
+    if let Ok(p) = std::env::var("RIND_LMDB_PATH") {
+        return PathBuf::from(p);
+    }
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| ".".to_string());
-    format!("{}/dns_records.jsonl", data_dir)
+    PathBuf::from(data_dir).join("lmdb")
 }
 
 // Helper function to record API metrics
@@ -473,19 +479,32 @@ async fn main() {
         }
     };
 
-    // Construct the pluggable datastore provider. Today this is JSON Lines on
-    // disk; alternative backends slot in behind the same `DatastoreProvider` trait.
-    let dns_records_file = get_dns_records_file();
-    let datastore: Arc<dyn update::DatastoreProvider> = Arc::new(
-        update::JsonlFileDatastoreProvider::new(dns_records_file.clone()),
-    );
+    let lmdb_path = get_lmdb_path();
+    if let Err(e) = fs::create_dir_all(&lmdb_path) {
+        error!(
+            "Failed to create LMDB directory {}: {}",
+            lmdb_path.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+    let lmdb_store = match storage::LmdbStore::open(&lmdb_path) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            error!("Failed to open LMDB env at {}: {}", lmdb_path.display(), e);
+            std::process::exit(1);
+        }
+    };
+    info!("LMDB env opened at {}", lmdb_path.display());
+
+    let datastore: Arc<dyn update::DatastoreProvider> =
+        Arc::new(update::LmdbDatastoreProvider::new(Arc::clone(&lmdb_store)));
 
     if let Err(e) = datastore.initialize().await {
         error!("Failed to initialize datastore: {}", e);
         std::process::exit(1);
     }
 
-    // Load all records via the trait into the in-memory cache.
     let initial_records = match datastore.load_all_records().await {
         Ok(r) => r,
         Err(e) => {

@@ -1,13 +1,14 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::sync::RwLock;
 use warp::Filter;
 
 use rind::update::{
-    ApiResponse, DatastoreProvider, DnsRecord, DnsRecords, JsonlFileDatastoreProvider, RecordData,
-    UpdateRecordRequest,
+    ApiResponse, DatastoreProvider, DnsRecord, DnsRecords, RecordData, UpdateRecordRequest,
 };
+
+mod common;
+use common::InMemoryDatastoreProvider;
 
 async fn create_test_server() -> (
     Arc<RwLock<DnsRecords>>,
@@ -23,13 +24,10 @@ async fn create_test_server() -> (
         },
     );
     records.insert(test_record.id.clone(), test_record);
-    let records_arc = Arc::new(RwLock::new(records));
 
-    let tmp = NamedTempFile::new().unwrap();
-    let datastore: Arc<dyn DatastoreProvider> = Arc::new(JsonlFileDatastoreProvider::new(
-        tmp.path().to_str().unwrap().to_string(),
-    ));
-    std::mem::forget(tmp);
+    let datastore: Arc<dyn DatastoreProvider> =
+        Arc::new(InMemoryDatastoreProvider::with_records(records.clone()));
+    let records_arc = Arc::new(RwLock::new(records));
 
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);

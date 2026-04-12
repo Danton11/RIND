@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- **Breaking**: LMDB is now the persistence backend. `JsonlFileDatastoreProvider`
+  and the `dns_records.jsonl` on-disk format are gone. The DNS server opens an
+  LMDB environment at `$RIND_LMDB_PATH` (or `$DATA_DIR/lmdb` as a fallback,
+  created on first boot) and persists every CRUD mutation as its own LMDB
+  transaction. Existing `dns_records.jsonl` files are ignored — recreate
+  records through the REST API.
+- `DatastoreProvider` trait reshaped around per-record operations:
+  `put_record(&DnsRecord)` and `delete_record(&str)` replace the old
+  bulk `save_all_records`. CRUD handlers persist first and update the
+  in-memory cache only on success, so a failed write no longer leaves a
+  phantom cache entry. Errors flow through a new `DatastoreError` enum
+  instead of boxed `dyn Error`.
 - LMDB storage scaffolding: new `src/storage.rs` module with `LmdbStore`
   handle backed by a heed environment. Five databases (`records`,
   `records_by_name`, `zones`, `changelog`, `metadata`) opened atomically.

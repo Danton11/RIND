@@ -2,10 +2,9 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use std::net::Ipv4Addr;
 
 use rind::packet::{build_response, parse, DnsQuery, Question};
-use rind::update::{
-    load_records_from_file, save_records_to_file, DnsRecord, DnsRecords, RecordData,
-};
-use tempfile::NamedTempFile;
+use rind::storage::LmdbStore;
+use rind::update::{DnsRecord, RecordData};
+use tempfile::tempdir;
 
 fn create_test_packet() -> Vec<u8> {
     vec![
@@ -62,60 +61,51 @@ fn bench_response_building(c: &mut Criterion) {
     });
 }
 
-fn bench_record_operations(c: &mut Criterion) {
-    let mut group = c.benchmark_group("record_operations");
-
-    // Benchmark file loading with different record counts
-    for record_count in [10, 100, 1000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("load_records", record_count),
-            record_count,
-            |b, &count| {
-                // Seed a JSONL file via the canonical writer so the format stays in sync.
-                let mut seeded = DnsRecords::new();
-                for i in 0..count {
-                    let record = DnsRecord::new(
-                        format!("test{}.com", i),
-                        300,
-                        "IN".to_string(),
-                        RecordData::A {
-                            ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
-                        },
-                    );
-                    seeded.insert(record.id.clone(), record);
-                }
-                let file = NamedTempFile::new().unwrap();
-                let path = file.path().to_str().unwrap().to_string();
-                save_records_to_file(&path, &seeded).unwrap();
-
-                b.iter(|| {
-                    let records = load_records_from_file(black_box(&path));
-                    black_box(records)
-                });
-            },
-        );
-    }
-
-    // Benchmark file saving
-    group.bench_function("save_records", |b| {
-        let mut records = DnsRecords::new();
-        for i in 0..100 {
-            let record = DnsRecord::new(
+fn seeded_records(count: usize) -> Vec<DnsRecord> {
+    (0..count)
+        .map(|i| {
+            DnsRecord::new(
                 format!("test{}.com", i),
                 300,
                 "IN".to_string(),
                 RecordData::A {
                     ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
                 },
-            );
-            records.insert(record.id.clone(), record);
-        }
+            )
+        })
+        .collect()
+}
 
+fn bench_record_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_operations");
+
+    for record_count in [10, 100, 1000].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("list_all_records", record_count),
+            record_count,
+            |b, &count| {
+                let dir = tempdir().unwrap();
+                let store = LmdbStore::open(dir.path()).unwrap();
+                for record in seeded_records(count) {
+                    store.put_record(&record).unwrap();
+                }
+
+                b.iter(|| {
+                    let records = store.list_all_records();
+                    black_box(records)
+                });
+            },
+        );
+    }
+
+    group.bench_function("put_record_batch_100", |b| {
+        let records = seeded_records(100);
         b.iter(|| {
-            let file = NamedTempFile::new().unwrap();
-            let path = file.path().to_str().unwrap();
-            let result = save_records_to_file(black_box(path), black_box(&records));
-            black_box(result)
+            let dir = tempdir().unwrap();
+            let store = LmdbStore::open(dir.path()).unwrap();
+            for record in &records {
+                store.put_record(black_box(record)).unwrap();
+            }
         });
     });
 
