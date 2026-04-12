@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- LMDB storage scaffolding: new `src/storage.rs` module with `LmdbStore`
+  handle backed by a heed environment. Four databases (`records`,
+  `records_by_name`, `zones`, `changelog`, `metadata`) opened atomically.
+  Transactional per-record CRUD with rolling FNV-1a-128 state hash for
+  drift detection, monotonically increasing version counter, and an
+  on-disk `schema_version` check that fails fast on mismatch.
+- Zone model groundwork: `Zone` struct mirroring SOA fields, zone CRUD
+  methods, and `find_zone_for()` longest-suffix matching so the query
+  path can answer AA/REFUSED correctly once Phase 2A lands.
+- RFC 4343 compliance in the storage index: names are canonicalized
+  (ASCII lowercase, trailing dot stripped) on every write and lookup so
+  `EXAMPLE.com.` and `example.com` hit the same slot. Stored record
+  bodies keep their original case — case-preserving, case-insensitive.
+- New operator doc `docs/KUBERNETES.md` covering LMDB filesystem
+  requirements (block- vs file-level network storage, CSI driver check),
+  cross-architecture snapshot warning, map-size tuning, and StatefulSet
+  vs Deployment pod topology.
+- Configurable LMDB map size via `RIND_LMDB_MAP_SIZE` env var (default
+  1 GiB). Invalid values are a hard startup error — no silent fallback.
 - Moved Grafana credentials to environment variables (`.env`)
 - **Breaking**: DNS records now use a typed `RecordData` enum. A and AAAA records
   are both first-class; the wire-format query path filters on both name and
