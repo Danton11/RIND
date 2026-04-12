@@ -79,32 +79,54 @@ fn seeded_records(count: usize) -> Vec<DnsRecord> {
 fn bench_record_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("record_operations");
 
-    for record_count in [10, 100, 1000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("list_all_records", record_count),
-            record_count,
-            |b, &count| {
-                let dir = tempdir().unwrap();
-                let store = LmdbStore::open(dir.path()).unwrap();
-                for record in seeded_records(count) {
-                    store.put_record(&record).unwrap();
-                }
+    // Pre-populate one store per size outside the bench closure. Criterion
+    // invokes the `bench_with_input` routine repeatedly during warmup and
+    // sample-size calibration, so any `LmdbStore::open` inside the closure
+    // accumulates file descriptors across runs and eventually trips EMFILE
+    // on the larger sizes. Setup once, capture by reference.
+    let read_setups: Vec<(usize, tempfile::TempDir, LmdbStore)> = [10, 100, 1000]
+        .iter()
+        .map(|&count| {
+            let dir = tempdir().unwrap();
+            let store = LmdbStore::open(dir.path()).unwrap();
+            for record in seeded_records(count) {
+                store.put_record(&record).unwrap();
+            }
+            (count, dir, store)
+        })
+        .collect();
 
-                b.iter(|| {
-                    let records = store.list_all_records();
-                    black_box(records)
-                });
+    for (count, _dir, store) in &read_setups {
+        group.bench_with_input(
+            BenchmarkId::new("list_all_records", count),
+            count,
+            |b, _| {
+                b.iter(|| black_box(store.list_all_records()));
             },
         );
     }
 
+    // Write bench: one env for the whole run, unique record ids per
+    // iteration so `put_record` never collides with an existing key.
+    // The generation counter is bumped inside `iter` — this means the
+    // DB grows over the course of the benchmark, but LMDB btree insert
+    // stays O(log n) so the trend is negligible for a few thousand iters.
     group.bench_function("put_record_batch_100", |b| {
-        let records = seeded_records(100);
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        let mut generation = 0u64;
         b.iter(|| {
-            let dir = tempdir().unwrap();
-            let store = LmdbStore::open(dir.path()).unwrap();
-            for record in &records {
-                store.put_record(black_box(record)).unwrap();
+            generation += 1;
+            for i in 0..100u32 {
+                let record = DnsRecord::new(
+                    format!("bench-{}-{}.test", generation, i),
+                    300,
+                    "IN".to_string(),
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, (i / 256) as u8, (i % 256) as u8),
+                    },
+                );
+                store.put_record(black_box(&record)).unwrap();
             }
         });
     });
