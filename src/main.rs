@@ -15,7 +15,7 @@ mod update;
 // Get data directory from environment or use current directory as fallback
 fn get_dns_records_file() -> String {
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| ".".to_string());
-    format!("{}/dns_records.txt", data_dir)
+    format!("{}/dns_records.jsonl", data_dir)
 }
 
 // Helper function to record API metrics
@@ -105,54 +105,58 @@ async fn update_record_handler(
     id: String,
     update_request: update::UpdateRecordRequest,
     records: Arc<RwLock<update::DnsRecords>>,
+    datastore: Arc<dyn update::DatastoreProvider>,
     metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let start_time = std::time::Instant::now();
     let endpoint = "/records/{id}";
     let method = "PUT";
 
-    let result =
-        match update::update_record(records, &id, update_request, Some(metrics_registry.clone()))
-            .await
-        {
-            Ok(record) => {
-                let response = update::ApiResponse::success(record);
-                let reply = warp::reply::with_status(
-                    warp::reply::json(&response),
-                    warp::http::StatusCode::OK,
-                );
+    let result = match update::update_record(
+        records,
+        datastore,
+        &id,
+        update_request,
+        Some(metrics_registry.clone()),
+    )
+    .await
+    {
+        Ok(record) => {
+            let response = update::ApiResponse::success(record);
+            let reply =
+                warp::reply::with_status(warp::reply::json(&response), warp::http::StatusCode::OK);
 
-                // Record metrics
-                let duration = start_time.elapsed().as_secs_f64();
-                record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(endpoint, method, 200, duration, &metrics_registry).await;
 
-                Ok(reply)
-            }
-            Err(e) => {
-                let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
-                let status_code = match e.to_status_code() {
-                    404 => warp::http::StatusCode::NOT_FOUND,
-                    400 => warp::http::StatusCode::BAD_REQUEST,
-                    409 => warp::http::StatusCode::CONFLICT,
-                    500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                };
-                let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
+            Ok(reply)
+        }
+        Err(e) => {
+            let response = update::ApiResponse::<update::DnsRecord>::error(e.to_string());
+            let status_code = match e.to_status_code() {
+                404 => warp::http::StatusCode::NOT_FOUND,
+                400 => warp::http::StatusCode::BAD_REQUEST,
+                409 => warp::http::StatusCode::CONFLICT,
+                500 => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                _ => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            let reply = warp::reply::with_status(warp::reply::json(&response), status_code);
 
-                // Record metrics
-                let duration = start_time.elapsed().as_secs_f64();
-                record_api_metrics(
-                    endpoint,
-                    method,
-                    status_code.as_u16(),
-                    duration,
-                    &metrics_registry,
-                )
-                .await;
+            // Record metrics
+            let duration = start_time.elapsed().as_secs_f64();
+            record_api_metrics(
+                endpoint,
+                method,
+                status_code.as_u16(),
+                duration,
+                &metrics_registry,
+            )
+            .await;
 
-                Ok(reply)
-            }
-        };
+            Ok(reply)
+        }
+    };
 
     result
 }
@@ -161,13 +165,21 @@ async fn update_record_handler(
 async fn delete_record_handler(
     id: String,
     records: Arc<RwLock<update::DnsRecords>>,
+    datastore: Arc<dyn update::DatastoreProvider>,
     metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let start_time = std::time::Instant::now();
     let endpoint = "/records/{id}";
     let method = "DELETE";
 
-    let result = match update::delete_record(records, &id, Some(metrics_registry.clone())).await {
+    let result = match update::delete_record(
+        records,
+        datastore,
+        &id,
+        Some(metrics_registry.clone()),
+    )
+    .await
+    {
         Ok(()) => {
             // Return HTTP 204 No Content on successful deletion
             let response = update::ApiResponse::<()>::success(());
@@ -281,6 +293,7 @@ async fn list_records_handler(
 async fn create_record_handler(
     create_request: update::CreateRecordRequest,
     records: Arc<RwLock<update::DnsRecords>>,
+    datastore: Arc<dyn update::DatastoreProvider>,
     metrics_registry: Arc<RwLock<metrics::MetricsRegistry>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let start_time = std::time::Instant::now();
@@ -289,6 +302,7 @@ async fn create_record_handler(
 
     let result = match update::create_record_from_request(
         records,
+        datastore,
         create_request,
         Some(metrics_registry.clone()),
     )
@@ -459,17 +473,27 @@ async fn main() {
         }
     };
 
-    // Get DNS records file path
+    // Construct the pluggable datastore provider. Today this is JSON Lines on
+    // disk; alternative backends slot in behind the same `DatastoreProvider` trait.
     let dns_records_file = get_dns_records_file();
+    let datastore: Arc<dyn update::DatastoreProvider> = Arc::new(
+        update::JsonlFileDatastoreProvider::new(dns_records_file.clone()),
+    );
 
-    // Ensure datastore is initialized before loading records
-    if let Err(e) = update::ensure_datastore_initialized(&dns_records_file) {
+    if let Err(e) = datastore.initialize().await {
         error!("Failed to initialize datastore: {}", e);
         std::process::exit(1);
     }
 
-    // Load DNS records and create shared references
-    let records = update::load_records(&dns_records_file);
+    // Load all records via the trait into the in-memory cache.
+    let initial_records = match datastore.load_all_records().await {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to load records from datastore: {}", e);
+            update::DnsRecords::new()
+        }
+    };
+    let records = Arc::new(RwLock::new(initial_records));
     let records_for_filter = Arc::clone(&records);
     let records_for_server = Arc::clone(&records);
 
@@ -485,23 +509,13 @@ async fn main() {
 
     let records_filter = warp::any().map(move || Arc::clone(&records_for_filter));
 
+    // Datastore filter — handed to every mutating route so CRUD can persist.
+    let datastore_for_filter = Arc::clone(&datastore);
+    let datastore_filter = warp::any().map(move || Arc::clone(&datastore_for_filter));
+
     // Create metrics filter
     let metrics_for_filter = Arc::clone(&metrics_registry);
     let metrics_filter = warp::any().map(move || Arc::clone(&metrics_for_filter));
-
-    // API route for updating DNS records (legacy)
-    let update_route = warp::path("update")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and(records_filter.clone())
-        .map(
-            |new_record: update::DnsRecord, records: Arc<RwLock<update::DnsRecords>>| {
-                tokio::spawn(async move {
-                    update::update_record_legacy(records, new_record).await;
-                });
-                warp::reply::reply()
-            },
-        );
 
     // GET /records/{id} - Retrieve a specific record by ID
     let get_record_route = warp::path("records")
@@ -519,6 +533,7 @@ async fn main() {
         .and(warp::put())
         .and(warp::body::json())
         .and(records_filter.clone())
+        .and(datastore_filter.clone())
         .and(metrics_filter.clone())
         .and_then(update_record_handler);
 
@@ -528,6 +543,7 @@ async fn main() {
         .and(warp::path::end())
         .and(warp::delete())
         .and(records_filter.clone())
+        .and(datastore_filter.clone())
         .and(metrics_filter.clone())
         .and_then(delete_record_handler);
 
@@ -546,6 +562,7 @@ async fn main() {
         .and(warp::post())
         .and(warp::body::json())
         .and(records_filter.clone())
+        .and(datastore_filter.clone())
         .and(metrics_filter.clone())
         .and_then(create_record_handler);
 
@@ -566,13 +583,15 @@ async fn main() {
         metrics_addr
     );
 
-    // Combine all API routes
-    let api_routes = update_route
-        .or(get_record_route)
+    // Combine all API routes. `.boxed()` collapses the nested filter type
+    // into a concrete `BoxedFilter`, which sidesteps a variance/lifetime
+    // inference problem when handler args include `Arc<dyn Trait>`.
+    let api_routes = get_record_route
         .or(update_record_route)
         .or(delete_record_route)
         .or(list_records_route)
-        .or(create_record_route);
+        .or(create_record_route)
+        .boxed();
 
     // Start API server in background
     let api_addr_clone = api_addr.clone();

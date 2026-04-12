@@ -1,0 +1,4 @@
+# RIND DNS records — JSON Lines (one record per line). Lines starting with `#` are comments.
+{"id":"550e8400-e29b-41d4-a716-446655440001","name":"example.com","ttl":300,"class":"IN","type":"A","ip":"93.184.216.34","created_at":"2026-04-12T00:00:00Z","updated_at":"2026-04-12T00:00:00Z"}
+{"id":"550e8400-e29b-41d4-a716-446655440002","name":"mail.example.com","ttl":3600,"class":"IN","type":"A","ip":"93.184.216.35","created_at":"2026-04-12T00:00:00Z","updated_at":"2026-04-12T00:00:00Z"}
+{"id":"550e8400-e29b-41d4-a716-446655440003","name":"v6.example.com","ttl":300,"class":"IN","type":"AAAA","ip":"2001:db8::1","created_at":"2026-04-12T00:00:00Z","updated_at":"2026-04-12T00:00:00Z"}

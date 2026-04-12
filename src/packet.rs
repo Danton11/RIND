@@ -1,6 +1,6 @@
+use crate::update::RecordData;
 use log::debug;
 use std::error::Error;
-use std::net::Ipv4Addr;
 
 /// Parses a DNS packet from bytes
 pub fn parse(packet: &[u8]) -> Result<DnsQuery, Box<dyn Error + Send + Sync>> {
@@ -127,59 +127,66 @@ fn read_name(
     Ok((name, offset))
 }
 
-/// Builds a DNS response packet
+/// Builds a DNS response packet.
+///
+/// `answer` is `Some(&RecordData)` when we have a matching record to return,
+/// and `None` for error responses (NXDOMAIN, FORMERR, NODATA) where ANCOUNT=0.
+/// `response_code` is the RCODE in the header flags (0=NOERROR, 3=NXDOMAIN, ...).
 pub fn build_response(
     query: DnsQuery,
-    ip: Ipv4Addr,
+    answer: Option<&RecordData>,
     response_code: u8,
     ttl: u32,
-    _record_type: String,
-    _class: String,
 ) -> Vec<u8> {
     let mut response = Vec::new();
 
     // Header
     response.extend(&query.id.to_be_bytes());
-    // Set response flag (0x8000) and response code in lower 4 bits
     let flags_with_rcode = (query.flags | 0x8000) | (response_code as u16);
     response.extend(&flags_with_rcode.to_be_bytes());
     response.extend(&1u16.to_be_bytes()); // QDCOUNT
-                                          // ANCOUNT should be 1 only if we have a successful response (response_code == 0)
-    let ancount = if response_code == 0 { 1u16 } else { 0u16 };
+    let ancount = if answer.is_some() { 1u16 } else { 0u16 };
     response.extend(&ancount.to_be_bytes()); // ANCOUNT
-
-    debug!(
-        "Building response: response_code={}, ancount={}",
-        response_code, ancount
-    );
     response.extend(&0u16.to_be_bytes()); // NSCOUNT
-    response.extend(&1u16.to_be_bytes()); // ARCOUNT
+    response.extend(&1u16.to_be_bytes()); // ARCOUNT (for OPT)
 
     debug!(
         "Building response: response_code={}, ancount={}",
         response_code, ancount
     );
 
-    // Question
+    // Question section (echo back)
     for question in query.questions.iter() {
         response.extend(encode_name(&question.name));
         response.extend(&question.qtype.to_be_bytes());
         response.extend(&question.qclass.to_be_bytes());
     }
 
-    // Answer
-    if response_code == 0 {
+    // Answer section
+    if let Some(data) = answer {
         for question in query.questions.iter() {
             response.extend(encode_name(&question.name));
-            response.extend(&1u16.to_be_bytes()); // TYPE A
+            response.extend(&data.type_code().to_be_bytes());
             response.extend(&1u16.to_be_bytes()); // CLASS IN
-            response.extend(&ttl.to_be_bytes()); // TTL
-            response.extend(&4u16.to_be_bytes()); // RDLENGTH
-            response.extend(&ip.octets());
+            response.extend(&ttl.to_be_bytes());
+
+            // RDLENGTH + RDATA depend on the variant. Exhaustive match so
+            // adding a new RecordData variant is a compile-time reminder
+            // to teach the encoder about it.
+            match data {
+                RecordData::A { ip } => {
+                    response.extend(&4u16.to_be_bytes()); // RDLENGTH
+                    response.extend(&ip.octets());
+                }
+                RecordData::Aaaa { ip } => {
+                    response.extend(&16u16.to_be_bytes()); // RDLENGTH
+                    response.extend(&ip.octets());
+                }
+            }
         }
     }
 
-    // Add OPT record to the response
+    // OPT record (EDNS0) in additional section
     response.extend(&[0u8][..]); // Name (root)
     response.extend(&41u16.to_be_bytes()); // Type (OPT)
     response.extend(&4096u16.to_be_bytes()); // UDP payload size
@@ -188,6 +195,7 @@ pub fn build_response(
 
     response
 }
+
 /// Encodes domain name into DNS wire format
 fn encode_name(name: &str) -> Vec<u8> {
     let mut encoded = Vec::new();

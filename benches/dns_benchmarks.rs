@@ -1,11 +1,10 @@
-use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::net::Ipv4Addr;
-use uuid::Uuid;
 
 use rind::packet::{build_response, parse, DnsQuery, Question};
-use rind::update::{load_records_from_file, save_records_to_file, DnsRecord, DnsRecords};
-use std::io::Write;
+use rind::update::{
+    load_records_from_file, save_records_to_file, DnsRecord, DnsRecords, RecordData,
+};
 use tempfile::NamedTempFile;
 
 fn create_test_packet() -> Vec<u8> {
@@ -49,17 +48,17 @@ fn bench_packet_parsing(c: &mut Criterion) {
 
 fn bench_response_building(c: &mut Criterion) {
     let query = create_test_query();
-    let ip = Ipv4Addr::new(192, 168, 1, 1);
+    let data = RecordData::A {
+        ip: Ipv4Addr::new(192, 168, 1, 1),
+    };
 
     c.bench_function("build_dns_response", |b| {
         b.iter(|| {
             let response = build_response(
                 black_box(query.clone()),
-                black_box(ip),
+                black_box(Some(&data)),
                 black_box(0),
                 black_box(300),
-                black_box("A".to_string()),
-                black_box("IN".to_string()),
             );
             black_box(response)
         })
@@ -75,15 +74,25 @@ fn bench_record_operations(c: &mut Criterion) {
             BenchmarkId::new("load_records", record_count),
             record_count,
             |b, &count| {
-                // Create temp file with records
-                let mut file = NamedTempFile::new().unwrap();
+                // Seed a JSONL file via the canonical writer so the format stays in sync.
+                let mut seeded = DnsRecords::new();
                 for i in 0..count {
-                    writeln!(file, "test{}.com:192.168.1.{}:300:A:IN", i, i % 255 + 1).unwrap();
+                    let record = DnsRecord::new(
+                        format!("test{}.com", i),
+                        300,
+                        "IN".to_string(),
+                        RecordData::A {
+                            ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
+                        },
+                    );
+                    seeded.insert(record.id.clone(), record);
                 }
-                let path = file.path().to_str().unwrap();
+                let file = NamedTempFile::new().unwrap();
+                let path = file.path().to_str().unwrap().to_string();
+                save_records_to_file(&path, &seeded).unwrap();
 
                 b.iter(|| {
-                    let records = load_records_from_file(black_box(path));
+                    let records = load_records_from_file(black_box(&path));
                     black_box(records)
                 });
             },
@@ -94,21 +103,15 @@ fn bench_record_operations(c: &mut Criterion) {
     group.bench_function("save_records", |b| {
         let mut records = DnsRecords::new();
         for i in 0..100 {
-            let now = Utc::now();
-            records.insert(
+            let record = DnsRecord::new(
                 format!("test{}.com", i),
-                DnsRecord {
-                    id: Uuid::new_v4().to_string(),
-                    name: format!("test{}.com", i),
-                    ip: Some(Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1)),
-                    ttl: 300,
-                    record_type: "A".to_string(),
-                    class: "IN".to_string(),
-                    value: None,
-                    created_at: now,
-                    updated_at: now,
+                300,
+                "IN".to_string(),
+                RecordData::A {
+                    ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
                 },
             );
+            records.insert(record.id.clone(), record);
         }
 
         b.iter(|| {

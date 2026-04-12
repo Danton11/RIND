@@ -32,7 +32,7 @@ Each DNS server instance runs three listeners:
 - **HTTP** — REST API for record CRUD (port 8080)
 - **HTTP** — Prometheus metrics (port 9090)
 
-Records are stored in a flat file (`dns_records.txt`), with plans to migrate to LMDB.
+Records are stored in a JSON Lines file (`dns_records.jsonl`), with plans to migrate to LMDB.
 
 ## Quick Start
 

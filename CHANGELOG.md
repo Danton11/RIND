@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 - Moved Grafana credentials to environment variables (`.env`)
+- **Breaking**: DNS records now use a typed `RecordData` enum. A and AAAA records
+  are both first-class; the wire-format query path filters on both name and
+  qtype, returning NODATA (NOERROR, ANCOUNT=0) when a name exists but the
+  requested type does not.
+- **Breaking**: REST API payload shape flattened. `POST /records` now takes
+  `{"name","ttl","class","type":"A"|"AAAA","ip"}`. `PUT /records/{id}` takes
+  partial fields plus an optional nested `"data": {"type":..., "ip":...}` —
+  omit `data` to preserve the existing payload, include it to replace wholesale.
+  The legacy `/update` endpoint is removed.
+- **Breaking**: Record storage format switched from the custom colon format to
+  JSON Lines. Default file path is now `dns_records.jsonl`. The pluggable
+  `DatastoreProvider` trait is wired through startup + CRUD so alternative
+  backends can slot in without touching handlers. `FileDatastoreProvider` is
+  renamed to `JsonlFileDatastoreProvider`.
 
 ## [0.1.0] - 2026-04-11
 

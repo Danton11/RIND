@@ -1,12 +1,21 @@
-use rind::update::{generate_record_id, DnsRecord};
-use std::net::Ipv4Addr;
+use rind::update::{generate_record_id, DnsRecord, RecordData};
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+fn a_record(name: &str) -> DnsRecord {
+    DnsRecord::new(
+        name.to_string(),
+        300,
+        "IN".to_string(),
+        RecordData::A {
+            ip: Ipv4Addr::new(93, 184, 216, 34),
+        },
+    )
+}
 
 #[test]
 fn test_uuid_generation() {
-    // Test that UUIDs are generated and unique
     let id1 = generate_record_id();
     let id2 = generate_record_id();
-
     assert_ne!(id1, id2, "Generated UUIDs should be unique");
     assert_eq!(id1.len(), 36, "UUID should be 36 characters long");
     assert_eq!(id2.len(), 36, "UUID should be 36 characters long");
@@ -14,38 +23,38 @@ fn test_uuid_generation() {
 
 #[test]
 fn test_dns_record_new_constructor() {
-    let record = DnsRecord::new(
-        "example.com".to_string(),
-        Some(Ipv4Addr::new(93, 184, 216, 34)),
-        300,
-        "A".to_string(),
-        "IN".to_string(),
-        None,
-    );
+    let record = a_record("example.com");
 
     assert!(!record.id.is_empty(), "Record should have a UUID");
     assert_eq!(record.name, "example.com");
-    assert_eq!(record.ip, Some(Ipv4Addr::new(93, 184, 216, 34)));
     assert_eq!(record.ttl, 300);
-    assert_eq!(record.record_type, "A");
     assert_eq!(record.class, "IN");
-    assert!(record.value.is_none());
-
-    // Timestamps should be set
+    assert_eq!(
+        record.data,
+        RecordData::A {
+            ip: Ipv4Addr::new(93, 184, 216, 34)
+        }
+    );
     assert!(record.created_at <= record.updated_at);
 }
 
 #[test]
-fn test_record_validation_valid() {
+fn test_dns_record_aaaa_variant() {
     let record = DnsRecord::new(
-        "example.com".to_string(),
-        Some(Ipv4Addr::new(93, 184, 216, 34)),
+        "v6.example.com".to_string(),
         300,
-        "A".to_string(),
         "IN".to_string(),
-        None,
+        RecordData::Aaaa {
+            ip: "2001:db8::1".parse::<Ipv6Addr>().unwrap(),
+        },
     );
+    assert_eq!(record.data.type_name(), "AAAA");
+    assert_eq!(record.data.type_code(), 28);
+}
 
+#[test]
+fn test_record_validation_valid() {
+    let record = a_record("example.com");
     assert!(
         record.validate().is_ok(),
         "Valid record should pass validation"
@@ -55,14 +64,13 @@ fn test_record_validation_valid() {
 #[test]
 fn test_record_validation_invalid_empty_name() {
     let record = DnsRecord::new(
-        "".to_string(), // Empty name should fail
-        Some(Ipv4Addr::new(1, 2, 3, 4)),
+        "".to_string(),
         300,
-        "A".to_string(),
         "IN".to_string(),
-        None,
+        RecordData::A {
+            ip: Ipv4Addr::new(1, 2, 3, 4),
+        },
     );
-
     assert!(
         record.validate().is_err(),
         "Record with empty name should fail validation"
@@ -70,53 +78,26 @@ fn test_record_validation_invalid_empty_name() {
 }
 
 #[test]
-fn test_record_validation_invalid_record_type() {
+fn test_record_validation_invalid_class() {
     let record = DnsRecord::new(
         "example.com".to_string(),
-        Some(Ipv4Addr::new(1, 2, 3, 4)),
         300,
-        "INVALID".to_string(), // Invalid record type
-        "IN".to_string(),
-        None,
+        "NOPE".to_string(),
+        RecordData::A {
+            ip: Ipv4Addr::new(1, 2, 3, 4),
+        },
     );
-
     assert!(
         record.validate().is_err(),
-        "Record with invalid type should fail validation"
-    );
-}
-
-#[test]
-fn test_record_validation_a_record_without_ip() {
-    let record = DnsRecord::new(
-        "example.com".to_string(),
-        None, // A record should have IP
-        300,
-        "A".to_string(),
-        "IN".to_string(),
-        None,
-    );
-
-    assert!(
-        record.validate().is_err(),
-        "A record without IP should fail validation"
+        "Record with invalid class should fail validation"
     );
 }
 
 #[test]
 fn test_record_touch_updates_timestamp() {
-    let mut record = DnsRecord::new(
-        "example.com".to_string(),
-        Some(Ipv4Addr::new(1, 2, 3, 4)),
-        300,
-        "A".to_string(),
-        "IN".to_string(),
-        None,
-    );
-
+    let mut record = a_record("example.com");
     let original_updated_at = record.updated_at;
 
-    // Sleep a bit to ensure timestamp difference
     std::thread::sleep(std::time::Duration::from_millis(10));
     record.touch();
 
@@ -132,28 +113,23 @@ fn test_record_touch_updates_timestamp() {
 
 #[test]
 fn test_record_has_same_content() {
-    let record1 = DnsRecord::new(
-        "example.com".to_string(),
-        Some(Ipv4Addr::new(1, 2, 3, 4)),
-        300,
-        "A".to_string(),
-        "IN".to_string(),
-        None,
-    );
+    let record1 = a_record("example.com");
+    let record2 = a_record("example.com");
 
-    let record2 = DnsRecord::new(
-        "example.com".to_string(),
-        Some(Ipv4Addr::new(1, 2, 3, 4)),
-        300,
-        "A".to_string(),
-        "IN".to_string(),
-        None,
-    );
-
-    // Should have same content despite different IDs and timestamps
     assert!(
         record1.has_same_content(&record2),
         "Records with same content should be detected"
     );
     assert_ne!(record1.id, record2.id, "Records should have different IDs");
+}
+
+#[test]
+fn test_record_serde_flatten_roundtrip() {
+    // The flattened form means JSON looks like {"name":"...","type":"A","ip":"..."}
+    let record = a_record("example.com");
+    let json = serde_json::to_string(&record).unwrap();
+    assert!(json.contains("\"type\":\"A\""));
+    assert!(json.contains("\"ip\":\"93.184.216.34\""));
+    let decoded: DnsRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.data, record.data);
 }

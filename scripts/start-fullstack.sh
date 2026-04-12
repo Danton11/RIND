@@ -10,6 +10,13 @@ COMPOSE_FILE="docker/docker-compose.fullstack.yml"
 PROJECT_NAME="rind-fullstack"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+# Compose defaults its env-file lookup to the compose-file directory (docker/),
+# but .env lives at the repo root — wire it in explicitly on every invocation.
+ENV_FILE="$ROOT_DIR/.env"
+COMPOSE_ENV_ARGS=()
+if [ -f "$ENV_FILE" ]; then
+    COMPOSE_ENV_ARGS=(--env-file "$ENV_FILE")
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -108,7 +115,7 @@ build_images() {
     log "Building RIND Docker images..."
     cd "$ROOT_DIR"
     
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" build --parallel
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" build --parallel
     
     log "Images built successfully ✓"
 }
@@ -146,9 +153,9 @@ start_services() {
     
     # Start services
     if [[ -n "$profiles" ]]; then
-        docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" $profiles up -d
+        docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" $profiles up -d
     else
-        docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" up -d
+        docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" up -d
     fi
     
     log "Services started successfully ✓"
@@ -192,7 +199,7 @@ stop_services() {
     cd "$ROOT_DIR"
     
     # Try graceful shutdown first
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" down
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" down
     
     # Check if any containers are still running
     local remaining=$(docker ps -q --filter "name=rind-")
@@ -225,7 +232,7 @@ show_status() {
     log "Service Status:"
     cd "$ROOT_DIR"
     
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" ps
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" ps
     
     echo
     log "Health Checks:"
@@ -267,10 +274,10 @@ show_logs() {
     
     if [[ $# -eq 0 ]]; then
         # Show all logs
-        docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" logs -f --tail=100
+        docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" logs -f --tail=100
     else
         # Show specific service logs
-        docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" logs -f --tail=100 "$1"
+        docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" logs -f --tail=100 "$1"
     fi
 }
 
@@ -280,7 +287,7 @@ clean_up() {
     cd "$ROOT_DIR"
     
     # Stop and remove containers with volumes
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" down -v --remove-orphans
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" down -v --remove-orphans
     
     # Force stop any remaining RIND containers
     local remaining=$(docker ps -aq --filter "name=rind-")
@@ -323,13 +330,13 @@ run_tests() {
     cd "$ROOT_DIR"
     
     # Start test profile
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" --profile testing up -d
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" --profile testing up -d
     
     # Wait for services
     sleep 15
     
     # Run tests
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" run --rm dns-tester
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" run --rm dns-tester
     
     log "Tests completed ✓"
 }
@@ -340,13 +347,13 @@ run_benchmarks() {
     cd "$ROOT_DIR"
     
     # Start benchmark profile
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" --profile benchmarking up -d
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" --profile benchmarking up -d
     
     # Wait for services
     sleep 15
     
     # Run benchmarks
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" run --rm benchmark-runner
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" run --rm benchmark-runner
     
     log "Benchmarks completed ✓"
 }
@@ -357,7 +364,7 @@ scale_servers() {
     log "Scaling DNS servers to $count instances..."
     cd "$ROOT_DIR"
     
-    docker-compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" up -d --scale dns-server-primary=1 --scale dns-server-secondary=$((count-1))
+    docker-compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" -p "$PROJECT_NAME" up -d --scale dns-server-primary=1 --scale dns-server-secondary=$((count-1))
     
     log "Scaled to $count DNS server instances ✓"
 }

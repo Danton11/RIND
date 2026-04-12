@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 WORKDIR /app
 COPY --from=builder /app/target/release/rind ./rind
-COPY dns_records.txt ./dns_records.txt
+COPY dns_records.jsonl ./dns_records.jsonl
 
 EXPOSE 12312/udp 8080/tcp
 

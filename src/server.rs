@@ -350,7 +350,7 @@ async fn handle_packet(
 mod tests {
     use super::*;
     use crate::metrics::MetricsRegistry;
-    use crate::update::DnsRecord;
+    use crate::update::{DnsRecord, RecordData};
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
 
@@ -360,11 +360,11 @@ mod tests {
         let mut records = HashMap::new();
         let record = DnsRecord::new(
             "test.com".to_string(),
-            Some(Ipv4Addr::new(1, 2, 3, 4)),
             300,
-            "A".to_string(),
             "IN".to_string(),
-            None,
+            RecordData::A {
+                ip: Ipv4Addr::new(1, 2, 3, 4),
+            },
         );
         records.insert(record.id.clone(), record);
         let records = Arc::new(RwLock::new(records));

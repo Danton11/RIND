@@ -14,12 +14,12 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Build dependencies only (cached until Cargo.toml/Cargo.lock change)
-RUN mkdir src benches tests && \
+RUN mkdir -p src/bin benches tests && \
     echo "fn main() {}" > src/main.rs && \
     echo "pub fn lib() {}" > src/lib.rs && \
     echo "fn main() {}" > src/bin/add_records.rs && \
     echo "fn main() {}" > src/bin/test_runner.rs && \
-    mkdir -p benches && echo "fn main() {}" > benches/dns_benchmarks.rs && \
+    echo "fn main() {}" > benches/dns_benchmarks.rs && \
     cargo build --release && \
     rm -rf src benches
 
@@ -28,8 +28,12 @@ COPY src ./src
 COPY benches ./benches
 COPY tests ./tests
 
-# Build the application (deps already cached)
-RUN cargo build --release
+# Build the application (deps already cached).
+# COPY preserves host mtimes, so freshly copied sources are often *older*
+# than the dummy binary built above — cargo then thinks nothing changed.
+# `touch` forces the real build to run.
+RUN find src benches tests -name '*.rs' -exec touch {} + && \
+    cargo build --release
 
 # Build utilities
 RUN cargo build --release --bin add_records

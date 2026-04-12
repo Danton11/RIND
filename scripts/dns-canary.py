@@ -182,18 +182,25 @@ class DNSCanary:
         self.metrics_port = metrics_port
         self.metrics = DNSCanaryMetrics()
         self.running = True
-        self.test_domains = ['example.com', 'google.com', 'cloudflare.com']
+        # (domain, qtype) — 1 = A, 28 = AAAA. Canary exercises both families so
+        # the query-path filtering + answer-section encoding both get covered.
+        self.test_domains = [
+            ('example.com', 1),
+            ('google.com', 1),
+            ('cloudflare.com', 1),
+            ('v6.example.com', 28),
+        ]
         
-    def test_dns_query(self, domain):
-        """Test a DNS query"""
+    def test_dns_query(self, domain, qtype=1):
+        """Test a DNS query. qtype is the wire-format type code (1=A, 28=AAAA)."""
         try:
             start_time = time.time()
-            
+
             # Create UDP socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(5.0)
-            
-            # Simple DNS query packet for A record
+
+            # Simple DNS query packet
             query_id = 0x1234
             query = bytearray()
             query.extend(query_id.to_bytes(2, 'big'))  # ID
@@ -202,14 +209,14 @@ class DNSCanary:
             query.extend(b'\x00\x00')  # Answer RRs: 0
             query.extend(b'\x00\x00')  # Authority RRs: 0
             query.extend(b'\x00\x00')  # Additional RRs: 0
-            
+
             # Encode domain name
             for part in domain.split('.'):
                 query.append(len(part))
                 query.extend(part.encode())
             query.append(0)  # End of name
-            
-            query.extend(b'\x00\x01')  # Type: A
+
+            query.extend(qtype.to_bytes(2, 'big'))  # QTYPE
             query.extend(b'\x00\x01')  # Class: IN
             
             # Send query
@@ -232,98 +239,120 @@ class DNSCanary:
             logger.debug(f"DNS query failed for {domain}: {e}")
             return False, response_time
     
+    # Per-type CRUD payloads. Keep A + AAAA here; extending this dict is how
+    # future record types get picked up by the cycle.
+    _CRUD_VARIANTS = {
+        "A": {
+            "name_suffix": "a.example.com",
+            "create_ip": "192.168.1.100",
+            "update_ip": "192.168.1.101",
+        },
+        "AAAA": {
+            "name_suffix": "aaaa.example.com",
+            "create_ip": "2001:db8::100",
+            "update_ip": "2001:db8::101",
+        },
+    }
+
     def test_api_request(self):
-        """Test comprehensive API CRUD operations"""
+        """Exercise a full CRUD cycle for each supported record type."""
+        start_time = time.time()
         try:
-            start_time = time.time()
-            
-            # Test 1: List records (GET /records)
+            # Test 1: List records (GET /records) — done once per cycle.
             list_url = f"http://{self.api_server}:{self.api_port}/records"
             list_response = requests.get(list_url, timeout=5)
             if list_response.status_code != 200:
                 logger.warning(f"List records failed: {list_response.status_code}")
                 return False, time.time() - start_time
-            
-            # Test 2: Create a test record (POST /records)
-            test_record_name = f"canary-test-{int(time.time())}.example.com"
-            create_payload = {
-                "name": test_record_name,
-                "ip": "192.168.1.100",
-                "ttl": 300,
-                "record_type": "A",
-                "class": "IN"
-            }
-            
-            create_response = requests.post(
-                list_url, 
-                json=create_payload, 
-                timeout=5,
-                headers={'Content-Type': 'application/json'}
-            )
-            
-            if create_response.status_code != 201:
-                logger.warning(f"Create record failed: {create_response.status_code}")
-                return False, time.time() - start_time
-            
-            # Extract the created record ID from response
-            created_record = create_response.json()
-            if not created_record.get('success') or not created_record.get('data'):
-                logger.warning("Create record response missing data")
-                return False, time.time() - start_time
-            
-            record_id = created_record['data']['id']
-            
-            # Test 3: Get specific record (GET /records/{id})
-            get_url = f"http://{self.api_server}:{self.api_port}/records/{record_id}"
-            get_response = requests.get(get_url, timeout=5)
-            if get_response.status_code != 200:
-                logger.warning(f"Get record failed: {get_response.status_code}")
-                return False, time.time() - start_time
-            
-            # Test 4: Update record (PUT /records/{id})
-            update_payload = {
-                "ip": "192.168.1.101",
-                "ttl": 600
-            }
-            
-            update_response = requests.put(
-                get_url,
-                json=update_payload,
-                timeout=5,
-                headers={'Content-Type': 'application/json'}
-            )
-            
-            if update_response.status_code != 200:
-                logger.warning(f"Update record failed: {update_response.status_code}")
-                return False, time.time() - start_time
-            
-            # Test 5: Delete record (DELETE /records/{id})
-            delete_response = requests.delete(get_url, timeout=5)
-            if delete_response.status_code not in [200, 204]:
-                logger.warning(f"Delete record failed: {delete_response.status_code}")
-                return False, time.time() - start_time
-            
-            # Test 6: Verify deletion (GET /records/{id} should return 404)
-            verify_response = requests.get(get_url, timeout=5)
-            if verify_response.status_code != 404:
-                logger.warning(f"Record deletion verification failed: {verify_response.status_code}")
-                return False, time.time() - start_time
-            
+
+            for record_type, variant in self._CRUD_VARIANTS.items():
+                ok = self._crud_cycle_for_type(list_url, record_type, variant)
+                if not ok:
+                    return False, time.time() - start_time
+
             response_time = time.time() - start_time
             logger.debug(f"Full API CRUD test completed successfully in {response_time:.3f}s")
             return True, response_time
-                
+
         except Exception as e:
             response_time = time.time() - start_time
             logger.debug(f"API CRUD test failed: {e}")
             return False, response_time
+
+    def _crud_cycle_for_type(self, list_url, record_type, variant):
+        """Create/read/update/delete a single record of the given type."""
+        test_record_name = f"canary-test-{int(time.time() * 1000)}-{variant['name_suffix']}"
+        create_payload = {
+            "name": test_record_name,
+            "ttl": 300,
+            "class": "IN",
+            "type": record_type,
+            "ip": variant["create_ip"],
+        }
+
+        create_response = requests.post(
+            list_url,
+            json=create_payload,
+            timeout=5,
+            headers={'Content-Type': 'application/json'},
+        )
+        if create_response.status_code != 201:
+            logger.warning(f"Create {record_type} record failed: {create_response.status_code}")
+            return False
+
+        created_record = create_response.json()
+        if not created_record.get('success') or not created_record.get('data'):
+            logger.warning(f"Create {record_type} response missing data")
+            return False
+
+        record_id = created_record['data']['id']
+        get_url = f"http://{self.api_server}:{self.api_port}/records/{record_id}"
+
+        # GET by id
+        get_response = requests.get(get_url, timeout=5)
+        if get_response.status_code != 200:
+            logger.warning(f"Get {record_type} record failed: {get_response.status_code}")
+            return False
+
+        # PUT — swap in a new IP via the nested `data` field so we exercise
+        # the typed update path, not just a ttl-only partial update.
+        update_payload = {
+            "ttl": 600,
+            "data": {"type": record_type, "ip": variant["update_ip"]},
+        }
+        update_response = requests.put(
+            get_url,
+            json=update_payload,
+            timeout=5,
+            headers={'Content-Type': 'application/json'},
+        )
+        if update_response.status_code != 200:
+            logger.warning(f"Update {record_type} record failed: {update_response.status_code}")
+            return False
+
+        # DELETE
+        delete_response = requests.delete(get_url, timeout=5)
+        if delete_response.status_code not in (200, 204):
+            logger.warning(f"Delete {record_type} record failed: {delete_response.status_code}")
+            return False
+
+        # Verify gone
+        verify_response = requests.get(get_url, timeout=5)
+        if verify_response.status_code != 404:
+            logger.warning(
+                f"{record_type} deletion verification failed: {verify_response.status_code}"
+            )
+            return False
+
+        return True
     
     def seed_test_records(self):
         """Seed DNS records for canary test domains so queries return NOERROR"""
         seed_records = [
-            {"name": "example.com", "ip": "93.184.216.34", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "google.com", "ip": "142.250.80.46", "ttl": 300, "record_type": "A", "class": "IN"},
-            {"name": "cloudflare.com", "ip": "104.16.132.229", "ttl": 300, "record_type": "A", "class": "IN"},
+            {"name": "example.com", "ttl": 300, "class": "IN", "type": "A", "ip": "93.184.216.34"},
+            {"name": "google.com", "ttl": 300, "class": "IN", "type": "A", "ip": "142.250.80.46"},
+            {"name": "cloudflare.com", "ttl": 300, "class": "IN", "type": "A", "ip": "104.16.132.229"},
+            {"name": "v6.example.com", "ttl": 300, "class": "IN", "type": "AAAA", "ip": "2001:db8::1"},
         ]
         url = f"http://{self.api_server}:{self.api_port}/records"
         for record in seed_records:
@@ -344,15 +373,16 @@ class DNSCanary:
         
         while self.running:
             try:
-                # Test DNS queries
-                for domain in self.test_domains:
-                    success, response_time = self.test_dns_query(domain)
+                # Test DNS queries (A + AAAA)
+                for domain, qtype in self.test_domains:
+                    success, response_time = self.test_dns_query(domain, qtype)
                     self.metrics.record_dns_query(success, response_time)
-                    
+
+                    type_name = {1: "A", 28: "AAAA"}.get(qtype, str(qtype))
                     if success:
-                        logger.debug(f"DNS query for {domain}: {response_time:.3f}s")
+                        logger.debug(f"DNS {type_name} query for {domain}: {response_time:.3f}s")
                     else:
-                        logger.warning(f"DNS query failed for {domain}: {response_time:.3f}s")
+                        logger.warning(f"DNS {type_name} query failed for {domain}: {response_time:.3f}s")
                 
                 # Test API CRUD operations
                 success, response_time = self.test_api_request()

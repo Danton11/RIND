@@ -20,7 +20,7 @@ services:
       - RUST_LOG=info
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt
+      - ../dns_records.jsonl:/app/dns_records.jsonl
     networks:
       - monitoring-network
     labels:
@@ -49,7 +49,7 @@ services:
       - RUST_LOG=info
       - DISABLE_FILE_LOGGING=true
     volumes:
-      - ../dns_records.txt:/app/dns_records.txt
+      - ../dns_records.jsonl:/app/dns_records.jsonl
     networks:
       - monitoring-network
     labels:
