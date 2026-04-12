@@ -129,14 +129,17 @@ fn read_name(
 
 /// Builds a DNS response packet.
 ///
-/// `answer` is `Some(&RecordData)` when we have a matching record to return,
-/// and `None` for error responses (NXDOMAIN, FORMERR, NODATA) where ANCOUNT=0.
+/// `answers` is the answer section RRSet, each entry a `(&RecordData, ttl)`
+/// tuple. Empty slice = error/NODATA/NXDOMAIN (ANCOUNT=0). Non-empty slice =
+/// one answer RR per entry, ANCOUNT=N. Per RFC 2181 §5.2 all entries in a
+/// single RRSet should share a TTL — the caller (`query.rs`) is responsible
+/// for clamping to the min TTL before calling here.
+///
 /// `response_code` is the RCODE in the header flags (0=NOERROR, 3=NXDOMAIN, ...).
 pub fn build_response(
     query: DnsQuery,
-    answer: Option<&RecordData>,
+    answers: &[(&RecordData, u32)],
     response_code: u8,
-    ttl: u32,
 ) -> Vec<u8> {
     let mut response = Vec::new();
 
@@ -144,8 +147,8 @@ pub fn build_response(
     response.extend(&query.id.to_be_bytes());
     let flags_with_rcode = (query.flags | 0x8000) | (response_code as u16);
     response.extend(&flags_with_rcode.to_be_bytes());
-    response.extend(&1u16.to_be_bytes()); // QDCOUNT
-    let ancount = if answer.is_some() { 1u16 } else { 0u16 };
+    response.extend(&(query.questions.len() as u16).to_be_bytes()); // QDCOUNT
+    let ancount = (query.questions.len() * answers.len()) as u16;
     response.extend(&ancount.to_be_bytes()); // ANCOUNT
     response.extend(&0u16.to_be_bytes()); // NSCOUNT
     response.extend(&1u16.to_be_bytes()); // ARCOUNT (for OPT)
@@ -162,9 +165,9 @@ pub fn build_response(
         response.extend(&question.qclass.to_be_bytes());
     }
 
-    // Answer section
-    if let Some(data) = answer {
-        for question in query.questions.iter() {
+    // Answer section: one RR per (question, answer) pair.
+    for question in query.questions.iter() {
+        for (data, ttl) in answers.iter() {
             response.extend(encode_name(&question.name));
             response.extend(&data.type_code().to_be_bytes());
             response.extend(&1u16.to_be_bytes()); // CLASS IN
@@ -181,6 +184,41 @@ pub fn build_response(
                 RecordData::Aaaa { ip } => {
                     response.extend(&16u16.to_be_bytes()); // RDLENGTH
                     response.extend(&ip.octets());
+                }
+                RecordData::Cname { target }
+                | RecordData::Ptr { target }
+                | RecordData::Ns { target } => {
+                    // RDATA is the target encoded as an uncompressed domain
+                    // name (RFC 1035 §3.3.1 CNAME, §3.3.11 NS, §3.3.12 PTR).
+                    // No pointer compression — encoder doesn't track offsets.
+                    let encoded = encode_name(target);
+                    response.extend(&(encoded.len() as u16).to_be_bytes()); // RDLENGTH
+                    response.extend(&encoded);
+                }
+                RecordData::Mx {
+                    preference,
+                    exchange,
+                } => {
+                    // RFC 1035 §3.3.9: 16-bit preference then uncompressed
+                    // exchange name. Clients sort by preference; we don't.
+                    let encoded = encode_name(exchange);
+                    let rdlen = 2 + encoded.len();
+                    response.extend(&(rdlen as u16).to_be_bytes()); // RDLENGTH
+                    response.extend(&preference.to_be_bytes());
+                    response.extend(&encoded);
+                }
+                RecordData::Txt { strings } => {
+                    // RFC 1035 §3.3.14: RDATA is one or more <character-string>.
+                    // Each character-string is a 1-octet length followed by
+                    // that many bytes. RDLENGTH = sum of (1 + len) across all.
+                    // Per-string ≤255-byte limit is already enforced at write
+                    // time via `validate_rdata`, so the `as u8` cast is safe.
+                    let rdlen: usize = strings.iter().map(|s| 1 + s.len()).sum();
+                    response.extend(&(rdlen as u16).to_be_bytes()); // RDLENGTH
+                    for s in strings.iter() {
+                        response.push(s.len() as u8);
+                        response.extend(s.as_bytes());
+                    }
                 }
             }
         }

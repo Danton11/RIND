@@ -47,6 +47,27 @@ pub enum RecordData {
     Aaaa {
         ip: Ipv6Addr,
     },
+    #[serde(rename = "CNAME")]
+    Cname {
+        target: String,
+    },
+    #[serde(rename = "PTR")]
+    Ptr {
+        target: String,
+    },
+    #[serde(rename = "NS")]
+    Ns {
+        target: String,
+    },
+    #[serde(rename = "MX")]
+    Mx {
+        preference: u16,
+        exchange: String,
+    },
+    #[serde(rename = "TXT")]
+    Txt {
+        strings: Vec<String>,
+    },
 }
 
 impl RecordData {
@@ -55,6 +76,11 @@ impl RecordData {
         match self {
             RecordData::A { .. } => 1,
             RecordData::Aaaa { .. } => 28,
+            RecordData::Cname { .. } => 5,
+            RecordData::Ptr { .. } => 12,
+            RecordData::Ns { .. } => 2,
+            RecordData::Mx { .. } => 15,
+            RecordData::Txt { .. } => 16,
         }
     }
 
@@ -63,6 +89,67 @@ impl RecordData {
         match self {
             RecordData::A { .. } => "A",
             RecordData::Aaaa { .. } => "AAAA",
+            RecordData::Cname { .. } => "CNAME",
+            RecordData::Ptr { .. } => "PTR",
+            RecordData::Ns { .. } => "NS",
+            RecordData::Mx { .. } => "MX",
+            RecordData::Txt { .. } => "TXT",
+        }
+    }
+
+    /// True if this variant is a CNAME. Used by the write path to enforce
+    /// RFC 2181 §10.1 — a name holding a CNAME must hold nothing else.
+    pub fn is_cname(&self) -> bool {
+        matches!(self, RecordData::Cname { .. })
+    }
+
+    /// True if multiple records are legal at the same `(name, type)`.
+    ///
+    /// Singleton types (A, AAAA, CNAME, PTR) reject any second record at the
+    /// same `(name, type)` at write time. Multi-value types (NS, MX, TXT)
+    /// instead reject only exact-rdata duplicates — RFC 2181 §5 says an RRSet
+    /// is a set, not a bag. Different rdata, same `(name, type)` is how
+    /// delegation sets, MX fallbacks, and TXT fan-out work.
+    ///
+    /// A/AAAA staying singleton is a *policy* choice, not an RFC requirement
+    /// — real DNS allows multi-A for round-robin. Flip the match arm if you
+    /// want that later.
+    pub fn allows_multiple(&self) -> bool {
+        match self {
+            RecordData::A { .. }
+            | RecordData::Aaaa { .. }
+            | RecordData::Cname { .. }
+            | RecordData::Ptr { .. } => false,
+            RecordData::Ns { .. } | RecordData::Mx { .. } | RecordData::Txt { .. } => true,
+        }
+    }
+
+    /// Rdata-level invariants that aren't enforced by the type system alone.
+    /// Called from `DnsRecord::validate`. Returns the first violation found.
+    pub fn validate_rdata(&self) -> Result<(), ValidationError> {
+        match self {
+            RecordData::Txt { strings } => {
+                if strings.is_empty() {
+                    return Err(ValidationError::MissingField(
+                        "TXT record must have at least one string".to_string(),
+                    ));
+                }
+                // RFC 1035 §3.3.14: each character-string is 1 length octet
+                // plus up to 255 bytes. Users with longer values must split
+                // into multiple Vec entries themselves — we don't auto-split
+                // because that would silently mutate user input.
+                for (i, s) in strings.iter().enumerate() {
+                    if s.len() > 255 {
+                        return Err(ValidationError::InvalidDomainName(format!(
+                            "TXT string #{} is {} bytes; RFC 1035 §3.3.14 limit is 255",
+                            i,
+                            s.len()
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 }
@@ -242,6 +329,8 @@ impl DnsRecord {
             return Err(ValidationError::InvalidClass(self.class.clone()));
         }
 
+        self.data.validate_rdata()?;
+
         Ok(())
     }
 
@@ -384,17 +473,47 @@ pub async fn create_record(
 
     let mut records_guard = records.write().await;
 
-    // Duplicate check: same name + same record type (e.g. two "A" records for foo.com).
+    // Conflict check — three rules fire here, in order:
+    //
+    //   1. RFC 2181 §10.1 CNAME exclusivity: a name holding a CNAME can hold
+    //      nothing else, and vice versa.
+    //   2. Singleton types (A, AAAA, CNAME, PTR) reject any second record
+    //      with the same `(name, type)`.
+    //   3. Multi-value types (NS, later MX/TXT) reject only exact-rdata
+    //      duplicates — RFC 2181 §5 says an RRSet is a set, not a bag.
     for existing_record in records_guard.values() {
-        if existing_record.name == new_record.name
-            && existing_record.data.type_name() == new_record.data.type_name()
-        {
+        if existing_record.name != new_record.name {
+            continue;
+        }
+        if existing_record.data.is_cname() || new_record.data.is_cname() {
+            let error = RecordError::DuplicateRecord(format!(
+                "CNAME at '{}' conflicts with existing record (RFC 2181 §10.1)",
+                new_record.name
+            ));
+            record_failure(&metrics_registry, "create", "cname_conflict", start_time).await;
+            return Err(error);
+        }
+        if existing_record.data.type_name() != new_record.data.type_name() {
+            continue;
+        }
+        // Same (name, type). Duplicate policy branches on whether this type
+        // permits multi-value RRSets.
+        if !new_record.data.allows_multiple() {
             let error = RecordError::DuplicateRecord(format!(
                 "Record with name '{}' and type '{}' already exists",
                 new_record.name,
                 new_record.data.type_name()
             ));
             record_failure(&metrics_registry, "create", "duplicate_record", start_time).await;
+            return Err(error);
+        }
+        if existing_record.data == new_record.data {
+            let error = RecordError::DuplicateRecord(format!(
+                "RRSet for '{}' {} already contains this rdata (RFC 2181 §5)",
+                new_record.name,
+                new_record.data.type_name()
+            ));
+            record_failure(&metrics_registry, "create", "rrset_duplicate", start_time).await;
             return Err(error);
         }
     }
@@ -565,15 +684,35 @@ pub async fn update_record(
         return Err(RecordError::ValidationError(validation_error));
     }
 
-    // Duplicate check (excluding the current record)
+    // Conflict check (excluding the current record): same three rules as
+    // create_record — CNAME exclusivity, singleton `(name, type)` rejection,
+    // multi-value exact-rdata rejection (RRSet is a set per RFC 2181 §5).
     for (other_id, other_record) in records_guard.iter() {
-        if other_id != id
-            && other_record.name == existing_record.name
-            && other_record.data.type_name() == existing_record.data.type_name()
-        {
+        if other_id == id || other_record.name != existing_record.name {
+            continue;
+        }
+        if other_record.data.is_cname() || existing_record.data.is_cname() {
+            record_failure(&metrics_registry, "update", "cname_conflict", start_time).await;
+            return Err(RecordError::DuplicateRecord(format!(
+                "CNAME at '{}' conflicts with existing record (RFC 2181 §10.1)",
+                existing_record.name
+            )));
+        }
+        if other_record.data.type_name() != existing_record.data.type_name() {
+            continue;
+        }
+        if !existing_record.data.allows_multiple() {
             record_failure(&metrics_registry, "update", "duplicate_record", start_time).await;
             return Err(RecordError::DuplicateRecord(format!(
                 "Record with name '{}' and type '{}' already exists",
+                existing_record.name,
+                existing_record.data.type_name()
+            )));
+        }
+        if other_record.data == existing_record.data {
+            record_failure(&metrics_registry, "update", "rrset_duplicate", start_time).await;
+            return Err(RecordError::DuplicateRecord(format!(
+                "RRSet for '{}' {} already contains this rdata (RFC 2181 §5)",
                 existing_record.name,
                 existing_record.data.type_name()
             )));
