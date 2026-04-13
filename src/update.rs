@@ -1,70 +1,12 @@
 use chrono::{DateTime, Utc};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::storage::{LmdbStore, StorageError};
-
-#[derive(Debug, thiserror::Error)]
-pub enum DatastoreError {
-    #[error("storage: {0}")]
-    Storage(#[from] StorageError),
-    #[error("record not found: {0}")]
-    NotFound(String),
-}
-
-/// Persistence backend for DNS records. Mutations are per-record so the
-/// backing store can commit them atomically; the in-memory `DnsRecords`
-/// hashmap is warmed from `load_all_records` at startup and kept coherent
-/// by the CRUD handlers.
-#[async_trait::async_trait]
-pub trait DatastoreProvider: Send + Sync {
-    async fn initialize(&self) -> Result<(), DatastoreError>;
-    async fn load_all_records(&self) -> Result<DnsRecords, DatastoreError>;
-    async fn put_record(&self, record: &DnsRecord) -> Result<(), DatastoreError>;
-    async fn delete_record(&self, id: &str) -> Result<(), DatastoreError>;
-}
-
-pub struct LmdbDatastoreProvider {
-    store: Arc<LmdbStore>,
-}
-
-impl LmdbDatastoreProvider {
-    pub fn new(store: Arc<LmdbStore>) -> Self {
-        Self { store }
-    }
-}
-
-#[async_trait::async_trait]
-impl DatastoreProvider for LmdbDatastoreProvider {
-    async fn initialize(&self) -> Result<(), DatastoreError> {
-        Ok(())
-    }
-
-    async fn load_all_records(&self) -> Result<DnsRecords, DatastoreError> {
-        let mut map = DnsRecords::new();
-        for record in self.store.list_all_records()? {
-            map.insert(record.id.clone(), record);
-        }
-        Ok(map)
-    }
-
-    async fn put_record(&self, record: &DnsRecord) -> Result<(), DatastoreError> {
-        self.store.put_record(record)?;
-        Ok(())
-    }
-
-    async fn delete_record(&self, id: &str) -> Result<(), DatastoreError> {
-        if !self.store.delete_record_by_id(id)? {
-            return Err(DatastoreError::NotFound(id.to_string()));
-        }
-        Ok(())
-    }
-}
 
 /// Type-specific record payload. Each variant carries exactly the fields
 /// that record type needs — invalid combinations are unrepresentable.
@@ -198,8 +140,6 @@ pub struct DnsRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-pub type DnsRecords = HashMap<String, DnsRecord>;
-
 /// Generate a new UUID for a DNS record
 pub fn generate_record_id() -> String {
     Uuid::new_v4().to_string()
@@ -226,8 +166,8 @@ pub enum RecordError {
     ValidationError(#[from] ValidationError),
     #[error("Duplicate record name: {0}")]
     DuplicateRecord(String),
-    #[error("Datastore error: {0}")]
-    DatastoreError(#[from] DatastoreError),
+    #[error("Storage error: {0}")]
+    StorageError(#[from] StorageError),
 }
 
 impl RecordError {
@@ -236,7 +176,7 @@ impl RecordError {
             RecordError::NotFound(_) => 404,
             RecordError::ValidationError(_) => 400,
             RecordError::DuplicateRecord(_) => 409,
-            RecordError::DatastoreError(_) => 500,
+            RecordError::StorageError(_) => 500,
         }
     }
 }
@@ -408,9 +348,12 @@ impl RrsetConflict {
     }
 }
 
-/// Check a candidate record against the live set for RFC 2181 conflicts.
+/// Check a candidate record against the live set at its name for RFC 2181
+/// conflicts.
 ///
-/// Three rules fire, in order:
+/// `existing` must already be filtered to records sharing the candidate's
+/// name — the LMDB secondary-index lookup does that upstream, so this fn
+/// stays a pure rule engine on a small slice. Three rules fire, in order:
 ///   1. §10.1 CNAME exclusivity: a name holding a CNAME can hold nothing else.
 ///   2. Singleton types (A, AAAA, CNAME, PTR) reject any second record with
 ///      the same `(name, type)`.
@@ -420,15 +363,12 @@ impl RrsetConflict {
 /// `exclude_id` skips the given record — used by `update_record` so a record
 /// does not conflict with its own pre-update state.
 fn check_rrset_conflict(
-    existing: &DnsRecords,
+    existing: &[DnsRecord],
     candidate: &DnsRecord,
     exclude_id: Option<&str>,
 ) -> Result<(), RrsetConflict> {
-    for (other_id, other) in existing.iter() {
-        if Some(other_id.as_str()) == exclude_id {
-            continue;
-        }
-        if other.name != candidate.name {
+    for other in existing {
+        if Some(other.id.as_str()) == exclude_id {
             continue;
         }
         if other.data.is_cname() || candidate.data.is_cname() {
@@ -450,9 +390,16 @@ fn check_rrset_conflict(
 // ---------- CRUD ----------
 
 /// Create a new DNS record.
+///
+/// Conflict checking and persistence are not wrapped in a single LMDB txn
+/// today — the check is a read txn and the put is a write txn, so two
+/// concurrent creates targeting the same name can both pass the check and
+/// both land. Within one process this is narrow: the fn performs no `.await`
+/// between the read and the write, so tokio cannot preempt a single task in
+/// the window. Multi-process (Phase 3 replication) will need a storage-level
+/// `put_if_no_conflict` primitive; tracked there, not here.
 pub async fn create_record(
-    records: Arc<RwLock<DnsRecords>>,
-    datastore: Arc<dyn DatastoreProvider>,
+    store: Arc<LmdbStore>,
     name: String,
     ttl: u32,
     class: String,
@@ -467,40 +414,28 @@ pub async fn create_record(
         return Err(RecordError::ValidationError(validation_error));
     }
 
-    let mut records_guard = records.write().await;
-
-    if let Err(conflict) = check_rrset_conflict(&records_guard, &new_record, None) {
+    let neighbours = store.find_records_by_name(&new_record.name)?;
+    if let Err(conflict) = check_rrset_conflict(&neighbours, &new_record, None) {
         let label = conflict.reason_label();
         let error = conflict.into_error(&new_record);
         record_failure(&metrics_registry, "create", label, start_time).await;
         return Err(error);
     }
 
-    if let Err(e) = datastore.put_record(&new_record).await {
-        record_failure(&metrics_registry, "create", "io_error", start_time).await;
-        return Err(RecordError::DatastoreError(e));
-    }
+    store.put_record(&new_record)?;
 
     let record_id = new_record.id.clone();
-    records_guard.insert(record_id.clone(), new_record.clone());
-
     info!("Created new record with ID {}: {}", record_id, name);
     debug!("New record details: {:?}", new_record);
 
-    record_success(
-        &metrics_registry,
-        "create",
-        start_time,
-        Some(records_guard.len()),
-    )
-    .await;
+    let total = store.record_count()? as usize;
+    record_success(&metrics_registry, "create", start_time, Some(total)).await;
     Ok(new_record)
 }
 
 /// Create a new DNS record from a `CreateRecordRequest`.
 pub async fn create_record_from_request(
-    records: Arc<RwLock<DnsRecords>>,
-    datastore: Arc<dyn DatastoreProvider>,
+    store: Arc<LmdbStore>,
     create_request: CreateRecordRequest,
     metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
@@ -508,8 +443,7 @@ pub async fn create_record_from_request(
     let class = create_request.class.unwrap_or_else(|| "IN".to_string());
 
     create_record(
-        records,
-        datastore,
+        store,
         create_request.name,
         ttl,
         class,
@@ -521,18 +455,17 @@ pub async fn create_record_from_request(
 
 /// Retrieve a specific DNS record by its UUID
 pub async fn get_record(
-    records: Arc<RwLock<DnsRecords>>,
+    store: Arc<LmdbStore>,
     id: &str,
     metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
     let start_time = std::time::Instant::now();
-    let records_guard = records.read().await;
 
-    match records_guard.get(id) {
+    match store.get_record_by_id(id)? {
         Some(record) => {
             debug!("Retrieved record with ID {}: {}", id, record.name);
             record_success(&metrics_registry, "read", start_time, None).await;
-            Ok(record.clone())
+            Ok(record)
         }
         None => {
             debug!("Record not found with ID: {}", id);
@@ -547,13 +480,12 @@ pub async fn get_record(
 
 /// List DNS records with pagination support
 pub async fn list_records(
-    records: Arc<RwLock<DnsRecords>>,
+    store: Arc<LmdbStore>,
     page: usize,
     per_page: usize,
     metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<RecordListResponse, RecordError> {
     let start_time = std::time::Instant::now();
-    let records_guard = records.read().await;
 
     if page == 0 {
         record_failure(&metrics_registry, "list", "validation_error", start_time).await;
@@ -569,11 +501,11 @@ pub async fn list_records(
         )));
     }
 
-    let total = records_guard.len();
-    let start_index = (page - 1) * per_page;
-
-    let mut all_records: Vec<DnsRecord> = records_guard.values().cloned().collect();
+    let mut all_records = store.list_all_records()?;
     all_records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let total = all_records.len();
+    let start_index = (page - 1) * per_page;
 
     let paginated_records: Vec<DnsRecord> = all_records
         .into_iter()
@@ -604,17 +536,15 @@ pub async fn list_records(
 /// `data` is all-or-nothing — include to replace the whole payload
 /// (including record type), omit to leave the payload unchanged.
 pub async fn update_record(
-    records: Arc<RwLock<DnsRecords>>,
-    datastore: Arc<dyn DatastoreProvider>,
+    store: Arc<LmdbStore>,
     id: &str,
     update_request: UpdateRecordRequest,
     metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<DnsRecord, RecordError> {
     let start_time = std::time::Instant::now();
-    let mut records_guard = records.write().await;
 
-    let mut existing_record = match records_guard.get(id) {
-        Some(record) => record.clone(),
+    let mut existing_record = match store.get_record_by_id(id)? {
+        Some(record) => record,
         None => {
             record_failure(&metrics_registry, "update", "not_found", start_time).await;
             return Err(RecordError::NotFound(format!(
@@ -642,7 +572,8 @@ pub async fn update_record(
         return Err(RecordError::ValidationError(validation_error));
     }
 
-    if let Err(conflict) = check_rrset_conflict(&records_guard, &existing_record, Some(id)) {
+    let neighbours = store.find_records_by_name(&existing_record.name)?;
+    if let Err(conflict) = check_rrset_conflict(&neighbours, &existing_record, Some(id)) {
         let label = conflict.reason_label();
         let error = conflict.into_error(&existing_record);
         record_failure(&metrics_registry, "update", label, start_time).await;
@@ -650,66 +581,50 @@ pub async fn update_record(
     }
 
     existing_record.touch();
-
-    if let Err(e) = datastore.put_record(&existing_record).await {
-        record_failure(&metrics_registry, "update", "io_error", start_time).await;
-        return Err(RecordError::DatastoreError(e));
-    }
-
-    records_guard.insert(id.to_string(), existing_record.clone());
+    store.put_record(&existing_record)?;
 
     info!("Updated record with ID {}: {}", id, existing_record.name);
-    record_success(
-        &metrics_registry,
-        "update",
-        start_time,
-        Some(records_guard.len()),
-    )
-    .await;
+    let total = store.record_count()? as usize;
+    record_success(&metrics_registry, "update", start_time, Some(total)).await;
 
     Ok(existing_record)
 }
 
 /// Delete a DNS record by its UUID
 pub async fn delete_record(
-    records: Arc<RwLock<DnsRecords>>,
-    datastore: Arc<dyn DatastoreProvider>,
+    store: Arc<LmdbStore>,
     id: &str,
     metrics_registry: Option<Arc<RwLock<crate::metrics::MetricsRegistry>>>,
 ) -> Result<(), RecordError> {
     let start_time = std::time::Instant::now();
-    let mut records_guard = records.write().await;
 
-    match records_guard.get(id) {
-        Some(record) => {
-            let record_name = record.name.clone();
-
-            if let Err(e) = datastore.delete_record(id).await {
-                record_failure(&metrics_registry, "delete", "io_error", start_time).await;
-                return Err(RecordError::DatastoreError(e));
-            }
-
-            records_guard.remove(id);
-
-            info!("Deleted record with ID {}: {}", id, record_name);
-            record_success(
-                &metrics_registry,
-                "delete",
-                start_time,
-                Some(records_guard.len()),
-            )
-            .await;
-            Ok(())
-        }
+    let record_name = match store.get_record_by_id(id)? {
+        Some(record) => record.name,
         None => {
             debug!("Attempted to delete non-existent record with ID: {}", id);
             record_failure(&metrics_registry, "delete", "not_found", start_time).await;
-            Err(RecordError::NotFound(format!(
+            return Err(RecordError::NotFound(format!(
                 "Record with ID '{}' not found",
                 id
-            )))
+            )));
         }
+    };
+
+    // Raced delete (a concurrent delete landed between our get and our
+    // delete) returns false — treat as NotFound so the caller sees a 404
+    // instead of a misleading 500.
+    if !store.delete_record_by_id(id)? {
+        record_failure(&metrics_registry, "delete", "not_found", start_time).await;
+        return Err(RecordError::NotFound(format!(
+            "Record with ID '{}' not found",
+            id
+        )));
     }
+
+    info!("Deleted record with ID {}: {}", id, record_name);
+    let total = store.record_count()? as usize;
+    record_success(&metrics_registry, "delete", start_time, Some(total)).await;
+    Ok(())
 }
 
 // ---------- metrics helpers ----------

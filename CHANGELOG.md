@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+- New `LmdbStore::put_records_batch(&[DnsRecord])` writes N records in one
+  `RwTxn` and commits once. Each record still produces its own version bump
+  and changelog entry, so the log stays one-entry-per-mutation — but the
+  single `fdatasync` at commit amortizes across the whole batch. On btrfs,
+  per-record cost drops from ~3.8 ms (single commit) to ~20 µs at batch
+  size 1000 (~190× speedup). Intended for bulk-write paths; no REST caller
+  yet. `put_record` now delegates to a shared `put_record_in_txn` helper.
+- DNS query path reads directly from LMDB via the `records_by_name`
+  secondary index. The `Arc<RwLock<DnsRecords>>` in-memory cache is gone
+  along with the `DatastoreProvider` trait and its in-memory test stub;
+  every read is a fresh LMDB prefix scan, and every write lands through
+  a single `Arc<LmdbStore>` handle. Handlers, the server dispatch loop,
+  and `build_instance` all thread the store directly. No more
+  cache-coherence bug surface, no more "stub behaves like LMDB"
+  assumptions in tests.
+- REST handler integration tests (`tests/test_post_endpoint.rs`,
+  `tests/test_put_endpoint.rs`, `tests/test_delete_endpoint.rs`,
+  `tests/test_list_records_endpoint.rs`) now run against a real
+  in-process RIND instance via `TestHarness::spawn()` — real sockets,
+  real warp filters, real LMDB tempdir — instead of re-implementing a
+  second copy of the routing on top of an in-memory stub.
+- `DELETE /records/:id` now returns an empty `204 No Content` body per
+  RFC 7230 §3.3.3. Previously we emitted a JSON success envelope with a
+  204 status, which some strict clients reject.
+- Changelog entries are now written to LMDB in the same `RwTxn` as the
+  record mutation itself. Every `put_record` / `delete_record_by_id`
+  commit produces exactly one `ChangelogEntry` keyed by the bumped
+  version counter, tagged Create / Update / Delete. This is the write
+  half of the sync protocol that secondaries will consume later.
 - **Breaking**: LMDB is now the persistence backend. `JsonlFileDatastoreProvider`
   and the `dns_records.jsonl` on-disk format are gone. The DNS server opens an
   LMDB environment at `$RIND_LMDB_PATH` (or `$DATA_DIR/lmdb` as a fallback,
