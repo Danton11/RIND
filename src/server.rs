@@ -10,16 +10,18 @@ use crate::packet;
 use crate::query;
 use crate::update::DnsRecords;
 
-/// Runs the DNS server on the specified address
+/// Runs the DNS server on a pre-bound UDP socket. Caller binds so ephemeral
+/// ports (127.0.0.1:0) can be resolved before the server starts — lets tests
+/// discover the real port without racing the dispatch loop.
 pub async fn run(
-    addr: &str,
+    socket: Arc<UdpSocket>,
     records: Arc<RwLock<DnsRecords>>,
     metrics_registry: Arc<RwLock<MetricsRegistry>>,
 ) -> Result<(), Box<dyn Error>> {
-    let server_span = span!(Level::INFO, "dns_server", bind_addr = %addr);
+    let bind_addr = socket.local_addr()?;
+    let server_span = span!(Level::INFO, "dns_server", bind_addr = %bind_addr);
     let _enter = server_span.enter();
 
-    let socket = Arc::new(UdpSocket::bind(addr).await?);
     let (tx, mut rx) = mpsc::channel::<(Vec<u8>, std::net::SocketAddr)>(1024);
 
     let instance_id =
@@ -27,7 +29,7 @@ pub async fn run(
 
     info!(
         instance_id = %instance_id,
-        bind_addr = %addr,
+        bind_addr = %bind_addr,
         channel_capacity = 1024,
         "DNS server started successfully"
     );

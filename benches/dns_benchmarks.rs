@@ -2,10 +2,9 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use std::net::Ipv4Addr;
 
 use rind::packet::{build_response, parse, DnsQuery, Question};
-use rind::update::{
-    load_records_from_file, save_records_to_file, DnsRecord, DnsRecords, RecordData,
-};
-use tempfile::NamedTempFile;
+use rind::storage::LmdbStore;
+use rind::update::{DnsRecord, RecordData};
+use tempfile::tempdir;
 
 fn create_test_packet() -> Vec<u8> {
     vec![
@@ -62,60 +61,73 @@ fn bench_response_building(c: &mut Criterion) {
     });
 }
 
-fn bench_record_operations(c: &mut Criterion) {
-    let mut group = c.benchmark_group("record_operations");
-
-    // Benchmark file loading with different record counts
-    for record_count in [10, 100, 1000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("load_records", record_count),
-            record_count,
-            |b, &count| {
-                // Seed a JSONL file via the canonical writer so the format stays in sync.
-                let mut seeded = DnsRecords::new();
-                for i in 0..count {
-                    let record = DnsRecord::new(
-                        format!("test{}.com", i),
-                        300,
-                        "IN".to_string(),
-                        RecordData::A {
-                            ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
-                        },
-                    );
-                    seeded.insert(record.id.clone(), record);
-                }
-                let file = NamedTempFile::new().unwrap();
-                let path = file.path().to_str().unwrap().to_string();
-                save_records_to_file(&path, &seeded).unwrap();
-
-                b.iter(|| {
-                    let records = load_records_from_file(black_box(&path));
-                    black_box(records)
-                });
-            },
-        );
-    }
-
-    // Benchmark file saving
-    group.bench_function("save_records", |b| {
-        let mut records = DnsRecords::new();
-        for i in 0..100 {
-            let record = DnsRecord::new(
+fn seeded_records(count: usize) -> Vec<DnsRecord> {
+    (0..count)
+        .map(|i| {
+            DnsRecord::new(
                 format!("test{}.com", i),
                 300,
                 "IN".to_string(),
                 RecordData::A {
                     ip: Ipv4Addr::new(192, 168, 1, (i % 255) as u8 + 1),
                 },
-            );
-            records.insert(record.id.clone(), record);
-        }
+            )
+        })
+        .collect()
+}
 
+fn bench_record_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_operations");
+
+    // Pre-populate one store per size outside the bench closure. Criterion
+    // invokes the `bench_with_input` routine repeatedly during warmup and
+    // sample-size calibration, so any `LmdbStore::open` inside the closure
+    // accumulates file descriptors across runs and eventually trips EMFILE
+    // on the larger sizes. Setup once, capture by reference.
+    let read_setups: Vec<(usize, tempfile::TempDir, LmdbStore)> = [10, 100, 1000]
+        .iter()
+        .map(|&count| {
+            let dir = tempdir().unwrap();
+            let store = LmdbStore::open(dir.path()).unwrap();
+            for record in seeded_records(count) {
+                store.put_record(&record).unwrap();
+            }
+            (count, dir, store)
+        })
+        .collect();
+
+    for (count, _dir, store) in &read_setups {
+        group.bench_with_input(
+            BenchmarkId::new("list_all_records", count),
+            count,
+            |b, _| {
+                b.iter(|| black_box(store.list_all_records()));
+            },
+        );
+    }
+
+    // Write bench: one env for the whole run, unique record ids per
+    // iteration so `put_record` never collides with an existing key.
+    // The generation counter is bumped inside `iter` — this means the
+    // DB grows over the course of the benchmark, but LMDB btree insert
+    // stays O(log n) so the trend is negligible for a few thousand iters.
+    group.bench_function("put_record_batch_100", |b| {
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        let mut generation = 0u64;
         b.iter(|| {
-            let file = NamedTempFile::new().unwrap();
-            let path = file.path().to_str().unwrap();
-            let result = save_records_to_file(black_box(path), black_box(&records));
-            black_box(result)
+            generation += 1;
+            for i in 0..100u32 {
+                let record = DnsRecord::new(
+                    format!("bench-{}-{}.test", generation, i),
+                    300,
+                    "IN".to_string(),
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, (i / 256) as u8, (i % 256) as u8),
+                    },
+                );
+                store.put_record(black_box(&record)).unwrap();
+            }
         });
     });
 

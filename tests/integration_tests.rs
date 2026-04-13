@@ -1,350 +1,370 @@
-use rand::Rng;
-use std::net::{SocketAddr, UdpSocket};
+//! End-to-end integration tests. Each test spawns its own in-process RIND
+//! instance via `TestHarness` — no fullstack docker required, no shared state
+//! between tests, no `#[ignore]`.
+
+mod common;
+
 use std::time::{Duration, Instant};
 
-fn get_dns_server_addr() -> String {
-    std::env::var("DNS_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:12312".to_string())
-}
-
-fn get_api_server_addr() -> String {
-    std::env::var("API_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string())
-}
-
-fn generate_unique_domain(prefix: &str) -> String {
-    let mut rng = rand::thread_rng();
-    let random_id: u32 = rng.gen();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("{}-{}-{}.test.local", prefix, timestamp, random_id)
-}
-
-fn create_dns_query_packet(domain: &str) -> Vec<u8> {
-    let mut packet = vec![
-        0x12, 0x34, // ID
-        0x01, 0x00, // Flags (standard query)
-        0x00, 0x01, // QDCOUNT
-        0x00, 0x00, // ANCOUNT
-        0x00, 0x00, // NSCOUNT
-        0x00, 0x00, // ARCOUNT
-    ];
-
-    // Encode domain name
-    for part in domain.split('.') {
-        packet.push(part.len() as u8);
-        packet.extend(part.as_bytes());
-    }
-    packet.push(0); // End of name
-
-    // Query type and class
-    packet.extend(&[0x00, 0x01]); // Type A
-    packet.extend(&[0x00, 0x01]); // Class IN
-
-    packet
-}
-
-async fn send_dns_query(domain: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-
-    let packet = create_dns_query_packet(domain);
-    let server_addr: SocketAddr = get_dns_server_addr().parse()?;
-
-    socket.send_to(&packet, server_addr)?;
-
-    let mut buffer = vec![0u8; 512];
-    let (len, _) = socket.recv_from(&mut buffer)?;
-    buffer.truncate(len);
-
-    Ok(buffer)
-}
-
-async fn add_dns_record_via_api(
-    name: &str,
-    ip: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = reqwest::Client::new();
-    let record = serde_json::json!({
-        "name": name,
-        "ip": ip,
-        "ttl": 300,
-        "record_type": "A",
-        "class": "IN",
-        "value": null
-    });
-
-    let response = client
-        .post(format!("http://{}/records", get_api_server_addr()))
-        .json(&record)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("API request failed: {}", response.status()).into())
-    }
-}
+use common::harness::{ancount, rcode, TestHarness};
+use serde_json::json;
 
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_end_to_end_record_addition() {
-    // Test adding a record via API and immediately querying it
-    let domain = generate_unique_domain("end-to-end");
-    let ip = "203.0.113.42";
+async fn end_to_end_record_addition() {
+    let h = TestHarness::spawn().await;
+    let domain = "end-to-end.test.local";
 
-    // Add record via API
     let start = Instant::now();
-    add_dns_record_via_api(&domain, ip)
-        .await
-        .expect("Failed to add record");
+    h.create_a(domain, "203.0.113.42").await;
     let api_time = start.elapsed();
 
-    // Small delay to ensure propagation
-    tokio::time::sleep(Duration::from_millis(10)).await;
-
-    // Query the record
     let query_start = Instant::now();
-    let response = send_dns_query(&domain).await.expect("Failed to query DNS");
+    let response = h.query_a(domain).await;
     let query_time = query_start.elapsed();
 
-    let total_time = start.elapsed();
+    assert!(response.len() > 12, "response too short");
+    assert_eq!(rcode(&response), 0, "rcode should be NOERROR");
+    assert!(ancount(&response) >= 1, "should have at least one answer");
 
-    // Verify response is valid
-    assert!(response.len() > 12, "Response too short");
-
-    // Check response flags indicate success
-    let flags = u16::from_be_bytes([response[2], response[3]]);
-    let response_code = flags & 0x000F;
-    assert_eq!(response_code, 0, "DNS query should succeed");
-
-    println!("End-to-end timing:");
-    println!("  Domain: {}", domain);
-    println!("  API time: {:?}", api_time);
-    println!("  Query time: {:?}", query_time);
-    println!("  Total time: {:?}", total_time);
-
-    // Adjusted performance assertions - more realistic for development environment
-    assert!(
-        total_time < Duration::from_millis(200),
-        "End-to-end should be under 200ms"
-    );
-    assert!(
-        query_time < Duration::from_millis(10),
-        "DNS query should be under 10ms"
-    );
+    println!("api: {:?}  query: {:?}", api_time, query_time);
 }
 
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_concurrent_queries() {
-    let domain = generate_unique_domain("concurrent");
-    let ip = "203.0.113.100";
+async fn concurrent_queries() {
+    let h = TestHarness::spawn().await;
+    let domain = "concurrent.test.local";
+    h.create_a(domain, "203.0.113.100").await;
 
-    // Add test record
-    add_dns_record_via_api(&domain, ip)
-        .await
-        .expect("Failed to add record");
-    tokio::time::sleep(Duration::from_millis(10)).await;
-
-    // Send multiple concurrent queries
     let num_queries = 50;
-    let mut handles = Vec::new();
-
     let start = Instant::now();
-
+    let mut handles = Vec::with_capacity(num_queries);
     for _ in 0..num_queries {
+        // Each query binds its own ephemeral client socket via the harness,
+        // so concurrency is real — no shared socket contention.
+        let dns_addr = h.dns_addr;
         let domain = domain.to_string();
-        let handle = tokio::spawn(async move { send_dns_query(&domain).await });
-        handles.push(handle);
+        handles.push(tokio::spawn(async move {
+            let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            sock.connect(dns_addr).await.unwrap();
+            let packet = common::harness::build_a_query(&domain);
+            sock.send(&packet).await.unwrap();
+            let mut buf = vec![0u8; 512];
+            let len = tokio::time::timeout(Duration::from_secs(2), sock.recv(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            buf.truncate(len);
+            rcode(&buf)
+        }));
     }
 
-    // Wait for all queries to complete
-    let mut successful = 0;
-    let mut failed = 0;
-
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(_response)) => successful += 1,
-            _ => failed += 1,
+    let mut ok = 0;
+    for h in handles {
+        if h.await.unwrap() == 0 {
+            ok += 1;
         }
     }
+    let elapsed = start.elapsed();
+    let qps = num_queries as f64 / elapsed.as_secs_f64();
+    println!("{} ok in {:?} ({:.0} qps)", ok, elapsed, qps);
 
-    let total_time = start.elapsed();
-    let qps = num_queries as f64 / total_time.as_secs_f64();
-
-    println!("Concurrent query results:");
-    println!("  Successful: {}/{}", successful, num_queries);
-    println!("  Failed: {}", failed);
-    println!("  Total time: {:?}", total_time);
-    println!("  QPS: {:.2}", qps);
-
-    assert!(
-        successful >= num_queries * 95 / 100,
-        "At least 95% should succeed"
-    );
-    assert!(qps > 100.0, "Should handle at least 100 QPS");
+    assert!(ok >= num_queries * 95 / 100, "at least 95% must succeed");
 }
 
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_malformed_packets() {
-    let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
-    socket
-        .set_read_timeout(Some(Duration::from_millis(1000)))
-        .expect("Failed to set timeout");
+async fn malformed_packets_do_not_crash_server() {
+    let h = TestHarness::spawn().await;
 
-    let server_addr: SocketAddr = get_dns_server_addr()
-        .parse()
-        .expect("Invalid server address");
+    // Sanity: server still answers good queries after eating junk.
+    let domain = "sanity.test.local";
+    h.create_a(domain, "203.0.113.7").await;
 
-    let malformed_packets = [
-        vec![],         // Empty packet
-        vec![0x00; 5],  // Too short
-        vec![0xFF; 12], // Invalid header
+    let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client.connect(h.dns_addr).await.unwrap();
+
+    for bad in [
+        vec![],
+        vec![0u8; 5],
+        vec![0xFFu8; 12],
         vec![
             0x12, 0x34, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ], // No questions
+        ],
+    ] {
+        // Malformed packets may or may not draw a response; we only care
+        // that the server doesn't wedge. Send and move on.
+        let _ = client.send(&bad).await;
+    }
+
+    // Server still alive?
+    let response = h.query_a(domain).await;
+    assert_eq!(rcode(&response), 0);
+}
+
+#[tokio::test]
+async fn extreme_domain_names() {
+    let h = TestHarness::spawn().await;
+
+    for domain in [
+        "a.test.local",
+        "very-long-subdomain-name-for-testing.test.local",
+        "multi.tld.test.co",
+        "123.test.local",
+        "test-with-hyphens.test.local",
+    ] {
+        h.create_a(domain, "203.0.113.123").await;
+        let response = h.query_a(domain).await;
+        assert_eq!(rcode(&response), 0, "{} should resolve", domain);
+    }
+}
+
+/// Every `RecordData` variant must round-trip from REST → LMDB → wire. Unit
+/// tests cover the packet encoder in isolation and filter-level handler
+/// tests cover serde, but nothing else proves the whole stack agrees on
+/// type_code + lookup + rdata emission for each type.
+#[tokio::test]
+async fn all_record_types_round_trip() {
+    let h = TestHarness::spawn().await;
+
+    // (POST body, qtype to dig)
+    let cases: Vec<(serde_json::Value, u16)> = vec![
+        (
+            json!({"name": "a.rt.test", "ttl": 300, "class": "IN", "type": "A", "ip": "1.2.3.4"}),
+            1,
+        ),
+        (
+            json!({"name": "aaaa.rt.test", "ttl": 300, "class": "IN", "type": "AAAA", "ip": "2001:db8::1"}),
+            28,
+        ),
+        (
+            json!({"name": "cname.rt.test", "ttl": 300, "class": "IN", "type": "CNAME", "target": "target.rt.test"}),
+            5,
+        ),
+        (
+            json!({"name": "ptr.rt.test", "ttl": 300, "class": "IN", "type": "PTR", "target": "target.rt.test"}),
+            12,
+        ),
+        (
+            json!({"name": "ns.rt.test", "ttl": 300, "class": "IN", "type": "NS", "target": "ns1.rt.test"}),
+            2,
+        ),
+        (
+            json!({"name": "mx.rt.test", "ttl": 300, "class": "IN", "type": "MX", "preference": 10, "exchange": "mx1.rt.test"}),
+            15,
+        ),
+        (
+            json!({"name": "txt.rt.test", "ttl": 300, "class": "IN", "type": "TXT", "strings": ["v=spf1 -all"]}),
+            16,
+        ),
     ];
 
-    for (i, packet) in malformed_packets.iter().enumerate() {
-        println!("Testing malformed packet {}", i);
+    for (body, qtype) in cases {
+        let name = body["name"].as_str().unwrap().to_string();
+        let type_name = body["type"].as_str().unwrap().to_string();
 
-        // Send malformed packet
-        socket
-            .send_to(packet, server_addr)
-            .expect("Failed to send packet");
+        let resp = h.post_record(body).await;
+        assert!(
+            resp.status().is_success(),
+            "POST {} failed: {}",
+            type_name,
+            resp.status()
+        );
 
-        // Try to receive response (should timeout for malformed packets)
-        let mut buffer = vec![0u8; 512];
-        match socket.recv_from(&mut buffer) {
-            Ok(_) => println!("  Packet {}: Got response (unexpected)", i),
-            Err(_) => println!("  Packet {}: Timeout (expected)", i),
-        }
+        let response = h.query(&name, qtype).await;
+        assert_eq!(rcode(&response), 0, "{} query should NOERROR", type_name);
+        assert!(
+            ancount(&response) >= 1,
+            "{} query should return at least one answer (ancount={})",
+            type_name,
+            ancount(&response)
+        );
     }
 }
 
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_record_update_performance() {
-    let domain = generate_unique_domain("update");
-    let initial_ip = "203.0.113.1";
+async fn nxdomain_for_unknown_name() {
+    let h = TestHarness::spawn().await;
+    let response = h.query_a("definitely-not-there.test").await;
+    assert_eq!(rcode(&response), 3, "expected NXDOMAIN");
+    assert_eq!(ancount(&response), 0);
+}
 
-    // Add initial record
-    add_dns_record_via_api(&domain, initial_ip)
-        .await
-        .expect("Failed to add initial record");
-    tokio::time::sleep(Duration::from_millis(10)).await;
+#[tokio::test]
+async fn nodata_when_name_exists_but_type_does_not() {
+    let h = TestHarness::spawn().await;
+    // Name has A only; asking for AAAA must return NOERROR with zero answers.
+    h.create_a("only-a.test", "1.2.3.4").await;
 
-    // Verify initial record
-    let response = send_dns_query(&domain)
-        .await
-        .expect("Failed to query initial record");
-    assert!(response.len() > 12);
+    let response = h.query("only-a.test", 28).await;
+    assert_eq!(rcode(&response), 0, "NODATA is signalled by NOERROR rcode");
+    assert_eq!(ancount(&response), 0, "NODATA has no answers");
+}
 
-    // For this test, we'll create a second unique domain to test "update" performance
-    // since the current API creates new records rather than updating existing ones
-    let domain2 = generate_unique_domain("update2");
-    let updated_ip = "203.0.113.2";
+#[tokio::test]
+async fn ns_rrset_returns_all_answers_on_wire() {
+    let h = TestHarness::spawn().await;
+    let name = "delegated.test";
 
-    // Measure timing for second record creation (simulating update performance)
-    let start = Instant::now();
-    add_dns_record_via_api(&domain2, updated_ip)
-        .await
-        .expect("Failed to add second record");
+    for target in ["ns1.delegated.test", "ns2.delegated.test"] {
+        let resp = h
+            .post_record(json!({
+                "name": name,
+                "ttl": 300,
+                "class": "IN",
+                "type": "NS",
+                "target": target,
+            }))
+            .await;
+        assert!(
+            resp.status().is_success(),
+            "NS POST failed: {}",
+            resp.status()
+        );
+    }
 
-    // Query the new record
-    let response = send_dns_query(&domain2)
-        .await
-        .expect("Failed to query second record");
-    let update_time = start.elapsed();
-
-    assert!(response.len() > 12);
-
-    println!("Record creation timing: {:?}", update_time);
-    println!("  Domain 1: {}", domain);
-    println!("  Domain 2: {}", domain2);
-    assert!(
-        update_time < Duration::from_millis(100),
-        "Record creation should be under 100ms"
+    let response = h.query(name, 2).await;
+    assert_eq!(rcode(&response), 0);
+    assert_eq!(
+        ancount(&response),
+        2,
+        "both NS records should be in the answer section"
     );
 }
 
+/// The full CRUD → DNS lifecycle: PUT updates the served value, DELETE
+/// removes it so subsequent queries NXDOMAIN. Scans the raw response for the
+/// new IP bytes to prove the update actually changed what's on the wire —
+/// without that, the test couldn't distinguish "PUT succeeded" from "PUT
+/// no-op'd but the record still resolves to the old value".
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_extreme_domain_names() {
-    let test_patterns = vec![
-        ("short", "a"),                                   // Short domain
-        ("long", "very-long-subdomain-name-for-testing"), // Long subdomain
-        ("multi-tld", "test.co"),                         // Multiple TLD parts
-        ("numeric", "123"),                               // Numeric subdomain
-        ("hyphens", "test-with-hyphens"),                 // Hyphens
-    ];
+async fn crud_lifecycle_reaches_the_wire() {
+    let h = TestHarness::spawn().await;
 
-    for (test_type, pattern) in test_patterns {
-        let domain = generate_unique_domain(pattern);
-        println!("Testing {} domain: {}", test_type, domain);
+    let id = h.create_a("lifecycle.test", "1.2.3.4").await;
+    let response = h.query_a("lifecycle.test").await;
+    assert_eq!(rcode(&response), 0);
+    assert!(
+        response.windows(4).any(|w| w == [1, 2, 3, 4]),
+        "initial A rdata should appear on the wire"
+    );
 
-        // Add record
-        let ip = "203.0.113.123";
-        add_dns_record_via_api(&domain, ip)
-            .await
-            .unwrap_or_else(|_| panic!("Failed to add record for {}", domain));
-        tokio::time::sleep(Duration::from_millis(5)).await;
+    // Replace the payload wholesale via the nested `data` shape.
+    let resp = h
+        .put_record(
+            &id,
+            json!({
+                "data": {"type": "A", "ip": "9.9.9.9"}
+            }),
+        )
+        .await;
+    assert!(resp.status().is_success(), "PUT failed: {}", resp.status());
 
-        // Query record
-        let response = send_dns_query(&domain)
-            .await
-            .unwrap_or_else(|_| panic!("Failed to query {}", domain));
+    let response = h.query_a("lifecycle.test").await;
+    assert_eq!(rcode(&response), 0);
+    assert!(
+        response.windows(4).any(|w| w == [9, 9, 9, 9]),
+        "updated A rdata should replace the old value on the wire"
+    );
+    assert!(
+        !response.windows(4).any(|w| w == [1, 2, 3, 4]),
+        "old A rdata must not linger"
+    );
 
-        // Verify response
-        assert!(response.len() > 12, "Response too short for {}", domain);
-        let flags = u16::from_be_bytes([response[2], response[3]]);
-        let response_code = flags & 0x000F;
-        assert_eq!(response_code, 0, "Query for {} should succeed", domain);
-    }
+    let resp = h.delete_record(&id).await;
+    assert!(
+        resp.status().is_success(),
+        "DELETE failed: {}",
+        resp.status()
+    );
+
+    let response = h.query_a("lifecycle.test").await;
+    assert_eq!(
+        rcode(&response),
+        3,
+        "deleted record should NXDOMAIN on query"
+    );
+}
+
+/// RFC 2181 §10.1: a CNAME cannot coexist with any other record type at the
+/// same name. The write path rejects both directions (CNAME-then-A and
+/// A-then-CNAME) with 409.
+#[tokio::test]
+async fn cname_exclusivity_enforced_on_both_directions() {
+    let h = TestHarness::spawn().await;
+
+    // CNAME first, then A at same name -> 409
+    let resp = h
+        .post_record(json!({
+            "name": "cname-first.test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "CNAME",
+            "target": "elsewhere.test",
+        }))
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = h
+        .post_record(json!({
+            "name": "cname-first.test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "1.2.3.4",
+        }))
+        .await;
+    assert_eq!(resp.status().as_u16(), 409, "A-over-CNAME must 409");
+
+    // A first, then CNAME at same name -> 409
+    let resp = h
+        .post_record(json!({
+            "name": "a-first.test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "1.2.3.4",
+        }))
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = h
+        .post_record(json!({
+            "name": "a-first.test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "CNAME",
+            "target": "elsewhere.test",
+        }))
+        .await;
+    assert_eq!(resp.status().as_u16(), 409, "CNAME-over-A must 409");
 }
 
 #[tokio::test]
-#[ignore] // requires running server
-async fn test_sustained_load() {
-    let domain = generate_unique_domain("load");
-    let ip = "203.0.113.200";
+async fn sustained_load() {
+    let h = TestHarness::spawn().await;
+    let domain = "load.test.local";
+    h.create_a(domain, "203.0.113.200").await;
 
-    // Add test record
-    add_dns_record_via_api(&domain, ip)
-        .await
-        .expect("Failed to add record");
-    tokio::time::sleep(Duration::from_millis(10)).await;
-
-    // Run sustained queries for 5 seconds
-    let duration = Duration::from_secs(5);
+    // Keep this short — CI boxes are slow. We care about "doesn't fall over",
+    // not an absolute qps number.
+    let duration = Duration::from_secs(1);
     let start = Instant::now();
-    let mut query_count = 0;
-    let mut error_count = 0;
-
+    let mut queries = 0;
+    let mut errors = 0;
     while start.elapsed() < duration {
-        match send_dns_query(&domain).await {
-            Ok(_) => query_count += 1,
-            Err(_) => error_count += 1,
+        let resp = h.query_a(domain).await;
+        if rcode(&resp) == 0 {
+            queries += 1;
+        } else {
+            errors += 1;
         }
-
-        // Small delay to prevent overwhelming
-        tokio::time::sleep(Duration::from_millis(1)).await;
     }
-
-    let actual_duration = start.elapsed();
-    let qps = query_count as f64 / actual_duration.as_secs_f64();
-    let error_rate = error_count as f64 / (query_count + error_count) as f64 * 100.0;
-
-    println!("Sustained load results:");
-    println!("  Duration: {:?}", actual_duration);
-    println!("  Queries: {}", query_count);
-    println!("  Errors: {}", error_count);
-    println!("  QPS: {:.2}", qps);
-    println!("  Error rate: {:.2}%", error_rate);
-
-    assert!(qps > 50.0, "Should maintain at least 50 QPS");
-    assert!(error_rate < 5.0, "Error rate should be under 5%");
+    let error_rate = errors as f64 / (queries + errors) as f64 * 100.0;
+    println!(
+        "{} queries in {:?}, {:.2}% errors",
+        queries,
+        start.elapsed(),
+        error_rate
+    );
+    assert!(queries > 100, "should get at least 100 queries in 1s");
+    assert!(error_rate < 1.0, "error rate should be near zero");
 }

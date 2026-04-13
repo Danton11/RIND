@@ -1,3 +1,4 @@
+pub mod instance;
 pub mod metrics;
 pub mod packet;
 pub mod query;

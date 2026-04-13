@@ -1,19 +1,12 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::sync::RwLock;
 use warp::Filter;
 
-use rind::update::{
-    ApiResponse, DatastoreProvider, DnsRecord, DnsRecords, JsonlFileDatastoreProvider, RecordData,
-};
+use rind::update::{ApiResponse, DatastoreProvider, DnsRecord, DnsRecords, RecordData};
 
-fn make_datastore() -> Arc<dyn DatastoreProvider> {
-    let tmp = NamedTempFile::new().unwrap();
-    let path = tmp.path().to_str().unwrap().to_string();
-    std::mem::forget(tmp);
-    Arc::new(JsonlFileDatastoreProvider::new(path))
-}
+mod common;
+use common::InMemoryDatastoreProvider;
 
 fn a_record(name: &str, ip: [u8; 4]) -> DnsRecord {
     DnsRecord::new(
@@ -33,9 +26,10 @@ async fn create_test_server() -> (
     let mut records = DnsRecords::new();
     let test_record = a_record("test.example.com", [192, 168, 1, 1]);
     records.insert(test_record.id.clone(), test_record);
-    let records_arc = Arc::new(RwLock::new(records));
 
-    let datastore = make_datastore();
+    let datastore: Arc<dyn DatastoreProvider> =
+        Arc::new(InMemoryDatastoreProvider::with_records(records.clone()));
+    let records_arc = Arc::new(RwLock::new(records));
 
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);
@@ -179,8 +173,9 @@ async fn test_delete_record_multiple_records() {
     records.insert(record1_id.clone(), record1);
     records.insert(record2_id.clone(), record2);
 
+    let datastore: Arc<dyn DatastoreProvider> =
+        Arc::new(InMemoryDatastoreProvider::with_records(records.clone()));
     let records_arc = Arc::new(RwLock::new(records));
-    let datastore = make_datastore();
 
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);

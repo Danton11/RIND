@@ -1,38 +1,69 @@
 use chrono::{DateTime, Utc};
-use log::{debug, error, info};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Trait for datastore operations — pluggable backend for record persistence.
-///
-/// Current shape is save-all / load-all. A future transactional backend would
-/// add per-record methods (`put_record`, `delete_record`) as an additive change
-/// so it doesn't have to serialize the whole HashMap on every mutation.
+use crate::storage::{LmdbStore, StorageError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum DatastoreError {
+    #[error("storage: {0}")]
+    Storage(#[from] StorageError),
+    #[error("record not found: {0}")]
+    NotFound(String),
+}
+
+/// Persistence backend for DNS records. Mutations are per-record so the
+/// backing store can commit them atomically; the in-memory `DnsRecords`
+/// hashmap is warmed from `load_all_records` at startup and kept coherent
+/// by the CRUD handlers.
 #[async_trait::async_trait]
 pub trait DatastoreProvider: Send + Sync {
-    /// Initialize the datastore (create file, connect to DB, etc.)
-    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn initialize(&self) -> Result<(), DatastoreError>;
+    async fn load_all_records(&self) -> Result<DnsRecords, DatastoreError>;
+    async fn put_record(&self, record: &DnsRecord) -> Result<(), DatastoreError>;
+    async fn delete_record(&self, id: &str) -> Result<(), DatastoreError>;
+}
 
-    /// Check if the datastore is properly configured and accessible
-    #[allow(dead_code)]
-    async fn health_check(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
+pub struct LmdbDatastoreProvider {
+    store: Arc<LmdbStore>,
+}
 
-    /// Load all records from the datastore
-    async fn load_all_records(
-        &self,
-    ) -> Result<DnsRecords, Box<dyn std::error::Error + Send + Sync>>;
+impl LmdbDatastoreProvider {
+    pub fn new(store: Arc<LmdbStore>) -> Self {
+        Self { store }
+    }
+}
 
-    /// Save all records to the datastore
-    async fn save_all_records(
-        &self,
-        records: &DnsRecords,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+#[async_trait::async_trait]
+impl DatastoreProvider for LmdbDatastoreProvider {
+    async fn initialize(&self) -> Result<(), DatastoreError> {
+        Ok(())
+    }
+
+    async fn load_all_records(&self) -> Result<DnsRecords, DatastoreError> {
+        let mut map = DnsRecords::new();
+        for record in self.store.list_all_records()? {
+            map.insert(record.id.clone(), record);
+        }
+        Ok(map)
+    }
+
+    async fn put_record(&self, record: &DnsRecord) -> Result<(), DatastoreError> {
+        self.store.put_record(record)?;
+        Ok(())
+    }
+
+    async fn delete_record(&self, id: &str) -> Result<(), DatastoreError> {
+        if !self.store.delete_record_by_id(id)? {
+            return Err(DatastoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
 }
 
 /// Type-specific record payload. Each variant carries exactly the fields
@@ -187,7 +218,6 @@ pub enum ValidationError {
     MissingField(String),
 }
 
-/// Record management error types
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
     #[error("Record not found: {0}")]
@@ -196,20 +226,16 @@ pub enum RecordError {
     ValidationError(#[from] ValidationError),
     #[error("Duplicate record name: {0}")]
     DuplicateRecord(String),
-    #[error("IO error: {0}")]
-    IoError(#[from] IoError),
     #[error("Datastore error: {0}")]
-    DatastoreError(String),
+    DatastoreError(#[from] DatastoreError),
 }
 
 impl RecordError {
-    /// Convert RecordError to HTTP status code
     pub fn to_status_code(&self) -> u16 {
         match self {
             RecordError::NotFound(_) => 404,
             RecordError::ValidationError(_) => 400,
             RecordError::DuplicateRecord(_) => 409,
-            RecordError::IoError(_) => 500,
             RecordError::DatastoreError(_) => 500,
         }
     }
@@ -344,113 +370,6 @@ impl DnsRecord {
     }
 }
 
-// ---------- Datastore: JSON Lines file provider ----------
-
-/// File-based datastore using JSON Lines — one serialized `DnsRecord` per line.
-///
-/// This is the default provider. Additional providers can slot in behind
-/// `DatastoreProvider`, which is the seam that keeps the rest of the code
-/// backend-agnostic.
-pub struct JsonlFileDatastoreProvider {
-    file_path: String,
-}
-
-impl JsonlFileDatastoreProvider {
-    pub fn new(file_path: String) -> Self {
-        Self { file_path }
-    }
-}
-
-#[async_trait::async_trait]
-impl DatastoreProvider for JsonlFileDatastoreProvider {
-    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Create the file if it doesn't exist, leave it alone otherwise.
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.file_path)?;
-        info!("Datastore initialized at {}", self.file_path);
-        Ok(())
-    }
-
-    async fn health_check(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(std::path::Path::new(&self.file_path).exists())
-    }
-
-    async fn load_all_records(
-        &self,
-    ) -> Result<DnsRecords, Box<dyn std::error::Error + Send + Sync>> {
-        load_records_from_file(&self.file_path)
-    }
-
-    async fn save_all_records(
-        &self,
-        records: &DnsRecords,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        save_records_to_file(&self.file_path, records).map_err(|e| e.into())
-    }
-}
-
-/// Load records from a JSON Lines file. Blank lines and `#`-comments are skipped.
-pub fn load_records_from_file(
-    file_path: &str,
-) -> Result<DnsRecords, Box<dyn std::error::Error + Send + Sync>> {
-    let mut records = DnsRecords::new();
-
-    let file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(records),
-        Err(e) => return Err(Box::new(e)),
-    };
-
-    let reader = BufReader::new(file);
-    for (lineno, line) in reader.lines().enumerate() {
-        let line = line?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        match serde_json::from_str::<DnsRecord>(trimmed) {
-            Ok(record) => {
-                records.insert(record.id.clone(), record);
-            }
-            Err(e) => {
-                error!(
-                    "Failed to parse record at {}:{}: {} (line: {})",
-                    file_path,
-                    lineno + 1,
-                    e,
-                    trimmed
-                );
-            }
-        }
-    }
-    Ok(records)
-}
-
-/// Save records to a JSON Lines file (one record per line).
-pub fn save_records_to_file(file_path: &str, records: &DnsRecords) -> Result<(), IoError> {
-    let file = File::create(file_path)?;
-    let mut writer = BufWriter::new(file);
-
-    writeln!(
-        writer,
-        "# RIND DNS records — JSON Lines (one record per line)"
-    )?;
-
-    for record in records.values() {
-        let json = serde_json::to_string(record).map_err(|e| {
-            IoError::new(
-                std::io::ErrorKind::InvalidData,
-                format!("serialize error: {}", e),
-            )
-        })?;
-        writeln!(writer, "{}", json)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
 /// Outcome of the shared conflict check between `create_record` and
 /// `update_record`. Carries both the metric-label reason and the caller-
 /// facing error so both call sites stay in sync.
@@ -557,13 +476,13 @@ pub async fn create_record(
         return Err(error);
     }
 
+    if let Err(e) = datastore.put_record(&new_record).await {
+        record_failure(&metrics_registry, "create", "io_error", start_time).await;
+        return Err(RecordError::DatastoreError(e));
+    }
+
     let record_id = new_record.id.clone();
     records_guard.insert(record_id.clone(), new_record.clone());
-
-    if let Err(e) = datastore.save_all_records(&records_guard).await {
-        record_failure(&metrics_registry, "create", "io_error", start_time).await;
-        return Err(RecordError::DatastoreError(e.to_string()));
-    }
 
     info!("Created new record with ID {}: {}", record_id, name);
     debug!("New record details: {:?}", new_record);
@@ -731,12 +650,13 @@ pub async fn update_record(
     }
 
     existing_record.touch();
-    records_guard.insert(id.to_string(), existing_record.clone());
 
-    if let Err(e) = datastore.save_all_records(&records_guard).await {
+    if let Err(e) = datastore.put_record(&existing_record).await {
         record_failure(&metrics_registry, "update", "io_error", start_time).await;
-        return Err(RecordError::DatastoreError(e.to_string()));
+        return Err(RecordError::DatastoreError(e));
     }
+
+    records_guard.insert(id.to_string(), existing_record.clone());
 
     info!("Updated record with ID {}: {}", id, existing_record.name);
     record_success(
@@ -763,12 +683,13 @@ pub async fn delete_record(
     match records_guard.get(id) {
         Some(record) => {
             let record_name = record.name.clone();
-            records_guard.remove(id);
 
-            if let Err(e) = datastore.save_all_records(&records_guard).await {
+            if let Err(e) = datastore.delete_record(id).await {
                 record_failure(&metrics_registry, "delete", "io_error", start_time).await;
-                return Err(RecordError::DatastoreError(e.to_string()));
+                return Err(RecordError::DatastoreError(e));
             }
+
+            records_guard.remove(id);
 
             info!("Deleted record with ID {}: {}", id, record_name);
             record_success(

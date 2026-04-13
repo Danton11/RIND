@@ -1,24 +1,21 @@
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::sync::RwLock;
 use warp::Filter;
 
 use rind::update::{
-    ApiResponse, CreateRecordRequest, DatastoreProvider, DnsRecord, DnsRecords,
-    JsonlFileDatastoreProvider, RecordData, UpdateRecordRequest,
+    ApiResponse, CreateRecordRequest, DatastoreProvider, DnsRecord, DnsRecords, RecordData,
+    UpdateRecordRequest,
 };
+
+mod common;
+use common::InMemoryDatastoreProvider;
 
 async fn create_test_server() -> (
     Arc<RwLock<DnsRecords>>,
     impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone,
 ) {
     let records_arc = Arc::new(RwLock::new(DnsRecords::new()));
-    let tmp = NamedTempFile::new().unwrap();
-    let datastore: Arc<dyn DatastoreProvider> = Arc::new(JsonlFileDatastoreProvider::new(
-        tmp.path().to_str().unwrap().to_string(),
-    ));
-    // Leak the tempfile guard so it survives for the test duration.
-    std::mem::forget(tmp);
+    let datastore: Arc<dyn DatastoreProvider> = Arc::new(InMemoryDatastoreProvider::new());
 
     let records_filter = warp::any().map({
         let records = Arc::clone(&records_arc);
