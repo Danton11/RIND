@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- DNS query path reads directly from LMDB via the `records_by_name`
+  secondary index. The `Arc<RwLock<DnsRecords>>` in-memory cache is gone
+  along with the `DatastoreProvider` trait and its in-memory test stub;
+  every read is a fresh LMDB prefix scan, and every write lands through
+  a single `Arc<LmdbStore>` handle. Handlers, the server dispatch loop,
+  and `build_instance` all thread the store directly. No more
+  cache-coherence bug surface, no more "stub behaves like LMDB"
+  assumptions in tests.
+- REST handler integration tests (`tests/test_post_endpoint.rs`,
+  `tests/test_put_endpoint.rs`, `tests/test_delete_endpoint.rs`,
+  `tests/test_list_records_endpoint.rs`) now run against a real
+  in-process RIND instance via `TestHarness::spawn()` — real sockets,
+  real warp filters, real LMDB tempdir — instead of re-implementing a
+  second copy of the routing on top of an in-memory stub.
+- `DELETE /records/:id` now returns an empty `204 No Content` body per
+  RFC 7230 §3.3.3. Previously we emitted a JSON success envelope with a
+  204 status, which some strict clients reject.
 - Changelog entries are now written to LMDB in the same `RwTxn` as the
   record mutation itself. Every `put_record` / `delete_record_by_id`
   commit produces exactly one `ChangelogEntry` keyed by the bumped

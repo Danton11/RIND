@@ -8,14 +8,14 @@ use tracing::{debug, error, info, span, trace, warn, Instrument, Level};
 use crate::metrics::MetricsRegistry;
 use crate::packet;
 use crate::query;
-use crate::update::DnsRecords;
+use crate::storage::LmdbStore;
 
 /// Runs the DNS server on a pre-bound UDP socket. Caller binds so ephemeral
 /// ports (127.0.0.1:0) can be resolved before the server starts — lets tests
 /// discover the real port without racing the dispatch loop.
 pub async fn run(
     socket: Arc<UdpSocket>,
-    records: Arc<RwLock<DnsRecords>>,
+    store: Arc<LmdbStore>,
     metrics_registry: Arc<RwLock<MetricsRegistry>>,
 ) -> Result<(), Box<dyn Error>> {
     let bind_addr = socket.local_addr()?;
@@ -80,7 +80,7 @@ pub async fn run(
     let mut active_handlers = 0u64;
     while let Some((packet, addr)) = rx.recv().await {
         let socket_clone = Arc::clone(&socket);
-        let records_clone = Arc::clone(&records);
+        let store_clone = Arc::clone(&store);
         let metrics_clone = Arc::clone(&metrics_registry);
         let instance_id_clone = instance_id.clone();
 
@@ -100,7 +100,7 @@ pub async fn run(
                 packet,
                 addr,
                 socket_clone,
-                records_clone,
+                store_clone,
                 metrics_clone,
                 instance_id_clone,
             )
@@ -117,7 +117,7 @@ async fn handle_packet(
     packet: Vec<u8>,
     addr: std::net::SocketAddr,
     socket: Arc<UdpSocket>,
-    records: Arc<RwLock<DnsRecords>>,
+    store: Arc<LmdbStore>,
     metrics_registry: Arc<RwLock<MetricsRegistry>>,
     instance_id: String,
 ) {
@@ -192,7 +192,7 @@ async fn handle_packet(
             );
 
             let (response, response_code) = query_processing_span
-                .in_scope(|| async { query::handle_query_with_code(query, records).await })
+                .in_scope(|| async { query::handle_query_with_code(query, store).await })
                 .await;
 
             // Calculate processing time
@@ -353,13 +353,18 @@ mod tests {
     use super::*;
     use crate::metrics::MetricsRegistry;
     use crate::update::{DnsRecord, RecordData};
-    use std::collections::HashMap;
     use std::net::Ipv4Addr;
+    use tempfile::TempDir;
+
+    fn tmpstore() -> (TempDir, Arc<LmdbStore>) {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(LmdbStore::open(dir.path()).unwrap());
+        (dir, store)
+    }
 
     #[tokio::test]
     async fn test_handle_packet_with_metrics() {
-        // Create test data
-        let mut records = HashMap::new();
+        let (_dir, store) = tmpstore();
         let record = DnsRecord::new(
             "test.com".to_string(),
             300,
@@ -368,13 +373,10 @@ mod tests {
                 ip: Ipv4Addr::new(1, 2, 3, 4),
             },
         );
-        records.insert(record.id.clone(), record);
-        let records = Arc::new(RwLock::new(records));
+        store.put_record(&record).unwrap();
 
-        // Create metrics registry
         let metrics_registry = Arc::new(RwLock::new(MetricsRegistry::new().unwrap()));
 
-        // Create a simple DNS query packet for test.com A record
         let packet = vec![
             0x12, 0x34, // ID
             0x01, 0x00, // Flags (standard query)
@@ -388,27 +390,22 @@ mod tests {
             0x00, 0x01, // Class IN
         ];
 
-        // Create a mock socket (we won't actually send anything)
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = "127.0.0.1:12345".parse().unwrap();
         let instance_id = "test-server-1".to_string();
 
-        // Call handle_packet
         handle_packet(
             packet,
             addr,
             socket,
-            records,
+            store,
             metrics_registry.clone(),
             instance_id,
         )
         .await;
 
-        // Verify metrics were recorded
         let metrics = metrics_registry.read().await;
         let metrics_text = metrics.gather_metrics().unwrap();
-
-        // Check that query counter was incremented
         assert!(metrics_text.contains("dns_queries_total"));
         assert!(metrics_text.contains("dns_responses_total"));
         assert!(metrics_text.contains("dns_query_duration_seconds"));
@@ -416,36 +413,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_packet_parsing_error() {
-        // Create empty records
-        let records = Arc::new(RwLock::new(HashMap::new()));
-
-        // Create metrics registry
+        let (_dir, store) = tmpstore();
         let metrics_registry = Arc::new(RwLock::new(MetricsRegistry::new().unwrap()));
 
-        // Create an invalid packet (too short)
-        let packet = vec![0x12, 0x34]; // Only 2 bytes, should cause parsing error
+        let packet = vec![0x12, 0x34]; // too short, parse error
 
-        // Create a mock socket
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = "127.0.0.1:12345".parse().unwrap();
         let instance_id = "test-server-1".to_string();
 
-        // Call handle_packet
         handle_packet(
             packet,
             addr,
             socket,
-            records,
+            store,
             metrics_registry.clone(),
             instance_id,
         )
         .await;
 
-        // Verify error metrics were recorded
         let metrics = metrics_registry.read().await;
         let metrics_text = metrics.gather_metrics().unwrap();
-
-        // Check that packet error counter was incremented
         assert!(metrics_text.contains("dns_packet_errors_total"));
     }
 }

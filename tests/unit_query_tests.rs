@@ -1,10 +1,11 @@
 use chrono::Utc;
 use rind::packet::{DnsQuery, Question};
 use rind::query::handle_query_with_code;
-use rind::update::{DnsRecord, DnsRecords, RecordData};
+use rind::storage::LmdbStore;
+use rind::update::{DnsRecord, RecordData};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tempfile::TempDir;
 use uuid::Uuid;
 
 fn make_record(name: &str, data: RecordData) -> DnsRecord {
@@ -24,12 +25,13 @@ fn make_record_ttl(name: &str, data: RecordData, ttl: u32) -> DnsRecord {
     }
 }
 
-fn store(records: Vec<DnsRecord>) -> Arc<RwLock<DnsRecords>> {
-    let mut map = DnsRecords::new();
+fn store(records: Vec<DnsRecord>) -> (TempDir, Arc<LmdbStore>) {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(LmdbStore::open(dir.path()).unwrap());
     for r in records {
-        map.insert(r.id.clone(), r);
+        store.put_record(&r).unwrap();
     }
-    Arc::new(RwLock::new(map))
+    (dir, store)
 }
 
 fn query(name: &str, qtype: u16) -> DnsQuery {
@@ -48,41 +50,39 @@ fn query(name: &str, qtype: u16) -> DnsQuery {
 
 #[tokio::test]
 async fn a_record_query_returns_noerror_with_answer() {
-    let records = store(vec![make_record(
+    let (_d, s) = store(vec![make_record(
         "a.example.com",
         RecordData::A {
             ip: Ipv4Addr::new(1, 2, 3, 4),
         },
     )]);
-    let (response, rcode) = handle_query_with_code(query("a.example.com", 1), records).await;
+    let (response, rcode) = handle_query_with_code(query("a.example.com", 1), s).await;
     assert_eq!(rcode, 0);
-    // ANCOUNT == 1
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
 }
 
 #[tokio::test]
 async fn aaaa_record_query_returns_noerror_with_answer() {
-    let records = store(vec![make_record(
+    let (_d, s) = store(vec![make_record(
         "v6.example.com",
         RecordData::Aaaa {
             ip: Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
         },
     )]);
-    let (response, rcode) = handle_query_with_code(query("v6.example.com", 28), records).await;
+    let (response, rcode) = handle_query_with_code(query("v6.example.com", 28), s).await;
     assert_eq!(rcode, 0);
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
 }
 
 #[tokio::test]
 async fn name_exists_but_wrong_type_returns_nodata() {
-    // Only an A record for this name; ask for AAAA → NODATA (rcode 0, ANCOUNT 0).
-    let records = store(vec![make_record(
+    let (_d, s) = store(vec![make_record(
         "only-a.example.com",
         RecordData::A {
             ip: Ipv4Addr::new(1, 2, 3, 4),
         },
     )]);
-    let (response, rcode) = handle_query_with_code(query("only-a.example.com", 28), records).await;
+    let (response, rcode) = handle_query_with_code(query("only-a.example.com", 28), s).await;
     assert_eq!(rcode, 0, "NODATA must use NOERROR rcode");
     assert_eq!(
         u16::from_be_bytes([response[6], response[7]]),
@@ -93,49 +93,47 @@ async fn name_exists_but_wrong_type_returns_nodata() {
 
 #[tokio::test]
 async fn nodata_reverse_direction_aaaa_only_vs_a_query() {
-    let records = store(vec![make_record(
+    let (_d, s) = store(vec![make_record(
         "only-v6.example.com",
         RecordData::Aaaa {
             ip: Ipv6Addr::LOCALHOST,
         },
     )]);
-    let (response, rcode) = handle_query_with_code(query("only-v6.example.com", 1), records).await;
+    let (response, rcode) = handle_query_with_code(query("only-v6.example.com", 1), s).await;
     assert_eq!(rcode, 0);
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
 }
 
 #[tokio::test]
 async fn missing_name_returns_nxdomain() {
-    let records = store(vec![]);
-    let (_response, rcode) = handle_query_with_code(query("ghost.example.com", 1), records).await;
+    let (_d, s) = store(vec![]);
+    let (_response, rcode) = handle_query_with_code(query("ghost.example.com", 1), s).await;
     assert_eq!(rcode, 3);
 }
 
 #[tokio::test]
 async fn unsupported_qtype_on_existing_name_is_nodata() {
     // SRV (33) isn't served; name exists as A → NODATA, not NXDOMAIN.
-    // Exercises the `qtype_to_name` None branch specifically (vs. the
-    // known-qtype-no-match path which hits a different branch).
-    let records = store(vec![make_record(
+    let (_d, s) = store(vec![make_record(
         "srv.example.com",
         RecordData::A {
             ip: Ipv4Addr::new(1, 2, 3, 4),
         },
     )]);
-    let (_response, rcode) = handle_query_with_code(query("srv.example.com", 33), records).await;
+    let (_response, rcode) = handle_query_with_code(query("srv.example.com", 33), s).await;
     assert_eq!(rcode, 0);
 }
 
 #[tokio::test]
 async fn unsupported_qtype_on_missing_name_is_nxdomain() {
-    let records = store(vec![]);
-    let (_response, rcode) = handle_query_with_code(query("nope.example.com", 33), records).await;
+    let (_d, s) = store(vec![]);
+    let (_response, rcode) = handle_query_with_code(query("nope.example.com", 33), s).await;
     assert_eq!(rcode, 3);
 }
 
 #[tokio::test]
 async fn both_a_and_aaaa_coexist_for_same_name() {
-    let records = store(vec![
+    let (_d, s) = store(vec![
         make_record(
             "dual.example.com",
             RecordData::A {
@@ -149,17 +147,17 @@ async fn both_a_and_aaaa_coexist_for_same_name() {
             },
         ),
     ]);
-    let (_, a_rcode) = handle_query_with_code(query("dual.example.com", 1), records.clone()).await;
-    let (_, aaaa_rcode) = handle_query_with_code(query("dual.example.com", 28), records).await;
+    let (_, a_rcode) = handle_query_with_code(query("dual.example.com", 1), Arc::clone(&s)).await;
+    let (_, aaaa_rcode) = handle_query_with_code(query("dual.example.com", 28), s).await;
     assert_eq!(a_rcode, 0);
     assert_eq!(aaaa_rcode, 0);
 }
 
 #[tokio::test]
 async fn ns_delegation_set_returns_all_records() {
-    // Two NS records at the same name = delegation set. A `dig example.com NS`
+    // Two NS records at the same name = delegation set. `dig example.com NS`
     // must return both. ANCOUNT == 2.
-    let records = store(vec![
+    let (_d, s) = store(vec![
         make_record(
             "example.com",
             RecordData::Ns {
@@ -173,7 +171,7 @@ async fn ns_delegation_set_returns_all_records() {
             },
         ),
     ]);
-    let (response, rcode) = handle_query_with_code(query("example.com", 2), records).await;
+    let (response, rcode) = handle_query_with_code(query("example.com", 2), s).await;
     assert_eq!(rcode, 0);
     assert_eq!(
         u16::from_be_bytes([response[6], response[7]]),
@@ -185,9 +183,8 @@ async fn ns_delegation_set_returns_all_records() {
 #[tokio::test]
 async fn ns_rrset_ttl_is_min_clamped() {
     // RFC 2181 §5.2: all RRs in an RRSet must share a TTL. We store per-record
-    // TTLs and clamp to the min at read time. Two NS records with TTLs 100 and
-    // 500 should both be emitted with TTL=100.
-    let records = store(vec![
+    // TTLs and clamp to the min at read time.
+    let (_d, s) = store(vec![
         make_record_ttl(
             "example.com",
             RecordData::Ns {
@@ -203,7 +200,7 @@ async fn ns_rrset_ttl_is_min_clamped() {
             500,
         ),
     ]);
-    let (response, rcode) = handle_query_with_code(query("example.com", 2), records).await;
+    let (response, rcode) = handle_query_with_code(query("example.com", 2), s).await;
     assert_eq!(rcode, 0);
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 2);
 
