@@ -257,6 +257,40 @@ fn bench_record_operations(c: &mut Criterion) {
         });
     });
 
+    // Batched commit — N inserts amortized over one fsync. On real disk,
+    // commit is ~95% of a single put and ~60% of that is fdatasync; if the
+    // amortization story is real, this should drop per-record cost by ~N
+    // until we hit a non-fsync ceiling.
+    for &batch_size in &[10usize, 100, 1000] {
+        group.bench_function(
+            BenchmarkId::new("put_records_batch_commit_once", batch_size),
+            |b| {
+                let dir = tempdir().unwrap();
+                let store = LmdbStore::open(dir.path()).unwrap();
+                let mut generation = 0u64;
+                b.iter_batched(
+                    || {
+                        generation += 1;
+                        (0..batch_size)
+                            .map(|i| {
+                                DnsRecord::new(
+                                    format!("batch-{}-{}.test", generation, i),
+                                    300,
+                                    "IN".to_string(),
+                                    RecordData::A {
+                                        ip: Ipv4Addr::new(10, 1, (i / 256) as u8, (i % 256) as u8),
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                    |records| store.put_records_batch(black_box(&records)).unwrap(),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
     // Scaling: single insert into a pre-seeded env of N records. The btree
     // depth grows as log(N) so insert cost should trend slowly upward. If
     // the gap between N=0 and N=10k is >2×, something else is going on

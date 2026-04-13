@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- New `LmdbStore::put_records_batch(&[DnsRecord])` writes N records in one
+  `RwTxn` and commits once. Each record still produces its own version bump
+  and changelog entry, so the log stays one-entry-per-mutation — but the
+  single `fdatasync` at commit amortizes across the whole batch. On btrfs,
+  per-record cost drops from ~3.8 ms (single commit) to ~20 µs at batch
+  size 1000 (~190× speedup). Intended for bulk-write paths; no REST caller
+  yet. `put_record` now delegates to a shared `put_record_in_txn` helper.
 - DNS query path reads directly from LMDB via the `records_by_name`
   secondary index. The `Arc<RwLock<DnsRecords>>` in-memory cache is gone
   along with the `DatastoreProvider` trait and its in-memory test stub;

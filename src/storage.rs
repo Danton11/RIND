@@ -315,17 +315,36 @@ impl LmdbStore {
     /// XORed out before the new one is XORed in. The changelog op kind is
     /// [`OpKind::Update`] on replace and [`OpKind::Create`] on first insert.
     pub fn put_record(&self, record: &DnsRecord) -> Result<(), StorageError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.put_record_in_txn(&mut wtxn, record)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Write multiple records inside a single `RwTxn` and commit once.
+    /// Each record still produces its own version bump and changelog entry,
+    /// so the log stays one-entry-per-mutation — but the single `fdatasync`
+    /// at commit amortizes across all N records. Intended for bulk-write
+    /// paths (bench harness today, changelog replay later).
+    pub fn put_records_batch(&self, records: &[DnsRecord]) -> Result<(), StorageError> {
+        let mut wtxn = self.env.write_txn()?;
+        for record in records {
+            self.put_record_in_txn(&mut wtxn, record)?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    fn put_record_in_txn(&self, wtxn: &mut RwTxn, record: &DnsRecord) -> Result<(), StorageError> {
         let id_bytes = record.id.as_bytes();
         let new_value = serde_json::to_vec(record)?;
-
-        let mut wtxn = self.env.write_txn()?;
 
         // If a record with this id exists, pull it out so we can XOR its
         // hash out of the rolling state_hash and drop its old index entry.
         // The old row may have had a different name/type than the new one,
         // so we can't just overwrite the compound key blindly.
-        let mut state = read_state_hash(&wtxn, self.metadata)?;
-        let existed = if let Some(old_bytes) = self.records.get(&wtxn, id_bytes)? {
+        let mut state = read_state_hash(wtxn, self.metadata)?;
+        let existed = if let Some(old_bytes) = self.records.get(wtxn, id_bytes)? {
             state ^= fnv1a_128(old_bytes);
             let old_record: DnsRecord = serde_json::from_slice(old_bytes)?;
             let old_key = encode_name_key(
@@ -333,18 +352,18 @@ impl LmdbStore {
                 old_record.data.type_code(),
                 &old_record.id,
             );
-            self.records_by_name.delete(&mut wtxn, &old_key)?;
+            self.records_by_name.delete(wtxn, &old_key)?;
             true
         } else {
             false
         };
 
-        self.records.put(&mut wtxn, id_bytes, &new_value)?;
+        self.records.put(wtxn, id_bytes, &new_value)?;
         let new_key = encode_name_key(&record.name, record.data.type_code(), &record.id);
-        self.records_by_name.put(&mut wtxn, &new_key, id_bytes)?;
+        self.records_by_name.put(wtxn, &new_key, id_bytes)?;
 
         state ^= fnv1a_128(&new_value);
-        let version = bump_version_and_hash(&mut wtxn, self.metadata, state)?;
+        let version = bump_version_and_hash(wtxn, self.metadata, state)?;
 
         let kind = if existed {
             OpKind::Update
@@ -356,9 +375,7 @@ impl LmdbStore {
             record_id: record.id.clone(),
             record: Some(record.clone()),
         };
-        write_changelog_entry(&mut wtxn, self.changelog, version, op)?;
-
-        wtxn.commit()?;
+        write_changelog_entry(wtxn, self.changelog, version, op)?;
         Ok(())
     }
 
