@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Changelog entries are now written to LMDB in the same `RwTxn` as the
+  record mutation itself. Every `put_record` / `delete_record_by_id`
+  commit produces exactly one `ChangelogEntry` keyed by the bumped
+  version counter, tagged Create / Update / Delete. This is the write
+  half of the sync protocol that secondaries will consume later.
 - **Breaking**: LMDB is now the persistence backend. `JsonlFileDatastoreProvider`
   and the `dns_records.jsonl` on-disk format are gone. The DNS server opens an
   LMDB environment at `$RIND_LMDB_PATH` (or `$DATA_DIR/lmdb` as a fallback,

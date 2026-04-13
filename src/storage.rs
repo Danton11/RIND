@@ -192,7 +192,6 @@ pub struct LmdbStore {
     records: Database<Bytes, Bytes>,
     records_by_name: Database<Bytes, Bytes>,
     zones: Database<Bytes, Bytes>,
-    #[allow(dead_code)] // populated once changelog writes are wired in
     changelog: Database<Bytes, Bytes>,
     metadata: Database<Bytes, Bytes>,
 }
@@ -307,12 +306,14 @@ impl LmdbStore {
 
     // ---------- writes ----------
 
-    /// Insert or replace a record. Maintains the secondary index and rolls
-    /// the state hash in the same atomic txn.
+    /// Insert or replace a record. Maintains the secondary index, rolls
+    /// the state hash, and appends a changelog entry — all in one atomic
+    /// txn. Either every side effect lands or none do.
     ///
     /// If a record with the same UUID already exists, its old secondary
     /// index entry is removed and its contribution to the state hash is
-    /// XORed out before the new one is XORed in.
+    /// XORed out before the new one is XORed in. The changelog op kind is
+    /// [`OpKind::Update`] on replace and [`OpKind::Create`] on first insert.
     pub fn put_record(&self, record: &DnsRecord) -> Result<(), StorageError> {
         let id_bytes = record.id.as_bytes();
         let new_value = serde_json::to_vec(record)?;
@@ -324,7 +325,7 @@ impl LmdbStore {
         // The old row may have had a different name/type than the new one,
         // so we can't just overwrite the compound key blindly.
         let mut state = read_state_hash(&wtxn, self.metadata)?;
-        if let Some(old_bytes) = self.records.get(&wtxn, id_bytes)? {
+        let existed = if let Some(old_bytes) = self.records.get(&wtxn, id_bytes)? {
             state ^= fnv1a_128(old_bytes);
             let old_record: DnsRecord = serde_json::from_slice(old_bytes)?;
             let old_key = encode_name_key(
@@ -333,14 +334,29 @@ impl LmdbStore {
                 &old_record.id,
             );
             self.records_by_name.delete(&mut wtxn, &old_key)?;
-        }
+            true
+        } else {
+            false
+        };
 
         self.records.put(&mut wtxn, id_bytes, &new_value)?;
         let new_key = encode_name_key(&record.name, record.data.type_code(), &record.id);
         self.records_by_name.put(&mut wtxn, &new_key, id_bytes)?;
 
         state ^= fnv1a_128(&new_value);
-        bump_version_and_hash(&mut wtxn, self.metadata, state)?;
+        let version = bump_version_and_hash(&mut wtxn, self.metadata, state)?;
+
+        let kind = if existed {
+            OpKind::Update
+        } else {
+            OpKind::Create
+        };
+        let op = RecordOp {
+            kind,
+            record_id: record.id.clone(),
+            record: Some(record.clone()),
+        };
+        write_changelog_entry(&mut wtxn, self.changelog, version, op)?;
 
         wtxn.commit()?;
         Ok(())
@@ -371,7 +387,14 @@ impl LmdbStore {
 
         let mut state = read_state_hash(&wtxn, self.metadata)?;
         state ^= fnv1a_128(&old_bytes);
-        bump_version_and_hash(&mut wtxn, self.metadata, state)?;
+        let version = bump_version_and_hash(&mut wtxn, self.metadata, state)?;
+
+        let op = RecordOp {
+            kind: OpKind::Delete,
+            record_id: id.to_string(),
+            record: None,
+        };
+        write_changelog_entry(&mut wtxn, self.changelog, version, op)?;
 
         wtxn.commit()?;
         Ok(true)
@@ -563,6 +586,21 @@ impl LmdbStore {
         let rtxn = self.env.read_txn()?;
         Ok(self.records.len(&rtxn)?)
     }
+
+    // ---------- changelog ----------
+
+    /// Read a single changelog entry by version. Returns `None` if that
+    /// version has not been written (either never existed or was compacted).
+    pub fn read_changelog_entry(
+        &self,
+        version: u64,
+    ) -> Result<Option<ChangelogEntry>, StorageError> {
+        let rtxn = self.env.read_txn()?;
+        match self.changelog.get(&rtxn, &version.to_be_bytes())? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+        }
+    }
 }
 
 // ---------- metadata helpers ----------
@@ -589,6 +627,23 @@ fn read_state_hash(
             decode_u128(bytes).ok_or(StorageError::CorruptMetadata("state_hash not u128"))
         }
     }
+}
+
+fn write_changelog_entry(
+    wtxn: &mut RwTxn,
+    changelog: Database<Bytes, Bytes>,
+    version: u64,
+    op: RecordOp,
+) -> Result<(), StorageError> {
+    let entry = ChangelogEntry {
+        schema_version: SCHEMA_VERSION,
+        version,
+        ts: Utc::now(),
+        ops: vec![op],
+    };
+    let value = serde_json::to_vec(&entry)?;
+    changelog.put(wtxn, &version.to_be_bytes(), &value)?;
+    Ok(())
 }
 
 fn bump_version_and_hash(
@@ -920,6 +975,102 @@ mod tests {
         // Delete must XOR the same contribution back out — empty store
         // returns to a zero hash.
         assert_eq!(store.state_hash().unwrap(), 0);
+    }
+
+    #[test]
+    fn put_writes_create_changelog_entry() {
+        let (_dir, store) = tmpstore();
+        let r = rec(
+            "cl.example.com",
+            RecordData::A {
+                ip: Ipv4Addr::new(1, 2, 3, 4),
+            },
+        );
+        store.put_record(&r).unwrap();
+
+        let entry = store.read_changelog_entry(1).unwrap().unwrap();
+        assert_eq!(entry.schema_version, SCHEMA_VERSION);
+        assert_eq!(entry.version, 1);
+        assert_eq!(entry.ops.len(), 1);
+        let op = &entry.ops[0];
+        assert_eq!(op.kind, OpKind::Create);
+        assert_eq!(op.record_id, r.id);
+        assert_eq!(op.record.as_ref().unwrap(), &r);
+    }
+
+    #[test]
+    fn put_replacing_existing_writes_update_entry() {
+        let (_dir, store) = tmpstore();
+        let mut r = rec(
+            "cl.example.com",
+            RecordData::A {
+                ip: Ipv4Addr::new(1, 2, 3, 4),
+            },
+        );
+        store.put_record(&r).unwrap();
+        r.data = RecordData::A {
+            ip: Ipv4Addr::new(5, 6, 7, 8),
+        };
+        store.put_record(&r).unwrap();
+
+        let v1 = store.read_changelog_entry(1).unwrap().unwrap();
+        assert_eq!(v1.ops[0].kind, OpKind::Create);
+        let v2 = store.read_changelog_entry(2).unwrap().unwrap();
+        assert_eq!(v2.ops[0].kind, OpKind::Update);
+        assert_eq!(v2.ops[0].record.as_ref().unwrap(), &r);
+    }
+
+    #[test]
+    fn delete_writes_delete_changelog_entry() {
+        let (_dir, store) = tmpstore();
+        let r = rec(
+            "cl.example.com",
+            RecordData::A {
+                ip: Ipv4Addr::new(1, 2, 3, 4),
+            },
+        );
+        store.put_record(&r).unwrap();
+        assert!(store.delete_record_by_id(&r.id).unwrap());
+
+        let entry = store.read_changelog_entry(2).unwrap().unwrap();
+        assert_eq!(entry.version, 2);
+        assert_eq!(entry.ops[0].kind, OpKind::Delete);
+        assert_eq!(entry.ops[0].record_id, r.id);
+        assert!(entry.ops[0].record.is_none());
+    }
+
+    #[test]
+    fn changelog_versions_match_current_version() {
+        let (_dir, store) = tmpstore();
+        assert!(store.read_changelog_entry(0).unwrap().is_none());
+
+        for i in 0..5u8 {
+            store
+                .put_record(&rec(
+                    "seq.example.com",
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, 0, i),
+                    },
+                ))
+                .unwrap();
+        }
+
+        assert_eq!(store.current_version().unwrap(), 5);
+        for v in 1..=5 {
+            let entry = store.read_changelog_entry(v).unwrap().unwrap();
+            assert_eq!(entry.version, v);
+        }
+        assert!(store.read_changelog_entry(6).unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_delete_writes_no_changelog_entry() {
+        // delete_record_by_id on a missing id must not bump the version or
+        // append an entry — txn aborts before bump.
+        let (_dir, store) = tmpstore();
+        assert!(!store.delete_record_by_id("nonexistent").unwrap());
+        assert_eq!(store.current_version().unwrap(), 0);
+        assert!(store.read_changelog_entry(1).unwrap().is_none());
     }
 
     fn test_zone(name: &str) -> Zone {
