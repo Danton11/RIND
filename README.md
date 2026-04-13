@@ -1,15 +1,36 @@
 # RIND
 
-A DNS server written in Rust with a REST API for record management, designed to run as a primary/secondary pair behind HAProxy with full observability via Prometheus, Grafana, and Loki.
+RIND is a DNS server written in Rust. It speaks the DNS wire protocol over UDP and exposes a REST API for live record management, with Prometheus metrics built in. Designed to run as a primary/secondary pair behind a load balancer for HA deployments.
 
 ## Architecture
+
+### Internals
+
+A single RIND process runs three listeners against a shared record store:
+
+```mermaid
+graph LR
+    UDP[UDP :12312<br/>DNS wire protocol] --> Store[(Record Store)]
+    API[HTTP :8080<br/>REST API] --> Store
+    Store --> Metrics[HTTP :9090<br/>Prometheus metrics]
+    Store <--> Disk[(LMDB)]
+```
+
+- **UDP listener** — parses DNS queries, looks up the record store, encodes responses.
+- **REST API** — CRUD over records, validated and applied to the same store.
+- **Metrics endpoint** — exports query counts, latency histograms, error rates.
+- **Persistence** — LMDB via `heed`. Every CRUD mutation is a single transaction covering the record store, the name index, a versioned changelog, and rolling state-hash metadata — so either all of it lands or none of it does. Chosen over a JSONL file for atomic multi-key writes, a durable changelog for replication, and no full-file rewrite on update.
+
+### Deployment
+
+Multiple instances compose into an HA setup behind HAProxy, with Prometheus, Grafana, Loki, and AlertManager providing observability:
 
 ```mermaid
 graph TD
     Client[Clients]
     HAProxy[HAProxy<br/>DNS: port 53 UDP<br/>API: port 80 HTTP]
-    Primary[DNS Server Primary<br/>DNS: 12312, API: 8080]
-    Secondary[DNS Server Secondary<br/>DNS: 12313, API: 8081]
+    Primary[RIND Primary<br/>DNS: 12312, API: 8080]
+    Secondary[RIND Secondary<br/>DNS: 12313, API: 8081]
     Prometheus[Prometheus<br/>port 9090]
     Grafana[Grafana<br/>port 3000]
     Loki[Loki<br/>port 3100]
@@ -26,13 +47,6 @@ graph TD
     Loki --> Grafana
     Prometheus --> AlertManager
 ```
-
-Each DNS server instance runs three listeners:
-- **UDP** — DNS protocol (port 12312)
-- **HTTP** — REST API for record CRUD (port 8080)
-- **HTTP** — Prometheus metrics (port 9090)
-
-Records are stored in a JSON Lines file (`dns_records.jsonl`), with plans to migrate to LMDB.
 
 ## Quick Start
 
