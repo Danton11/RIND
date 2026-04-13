@@ -1,10 +1,12 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use rind::packet::{build_response, parse, DnsQuery, Question};
 use rind::storage::LmdbStore;
-use rind::update::{DnsRecord, RecordData};
+use rind::update::{self, DnsRecord, RecordData};
 use tempfile::tempdir;
+use tokio::runtime::Runtime;
 
 fn create_test_packet() -> Vec<u8> {
     vec![
@@ -106,11 +108,9 @@ fn bench_record_operations(c: &mut Criterion) {
         );
     }
 
-    // Write bench: one env for the whole run, unique record ids per
-    // iteration so `put_record` never collides with an existing key.
-    // The generation counter is bumped inside `iter` — this means the
-    // DB grows over the course of the benchmark, but LMDB btree insert
-    // stays O(log n) so the trend is negligible for a few thousand iters.
+    // Legacy batched-insert bench: 100 fresh records per iteration, all with
+    // unique ids, so every call hits the `existed == false` branch. Kept as a
+    // rough top-line number that rolls up per-iter commit cost × 100.
     group.bench_function("put_record_batch_100", |b| {
         let dir = tempdir().unwrap();
         let store = LmdbStore::open(dir.path()).unwrap();
@@ -130,6 +130,171 @@ fn bench_record_operations(c: &mut Criterion) {
             }
         });
     });
+
+    // Single insert on an empty-ish env. `existed == false` branch only.
+    // Each iter gets a fresh DnsRecord via `iter_batched` so the generator
+    // cost is excluded from the measured routine. The store still grows
+    // across iters (ids are distinct), so this trends toward the "insert
+    // into a growing btree" cost — fine for a baseline, see the scaling
+    // bench below if the trend actually matters.
+    group.bench_function("put_record_insert_new", |b| {
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        let mut counter = 0u64;
+        b.iter_batched(
+            || {
+                counter += 1;
+                DnsRecord::new(
+                    format!("insert-{}.test", counter),
+                    300,
+                    "IN".to_string(),
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, 0, 1),
+                    },
+                )
+            },
+            |record| store.put_record(black_box(&record)).unwrap(),
+            BatchSize::SmallInput,
+        );
+    });
+
+    // Replace an existing record — exercises the `existed == true` branch:
+    // reads old bytes, XORs old hash out, deletes old secondary-index entry,
+    // then the four writes of the normal insert. Should cost ~1.5–2× the
+    // insert case. Reuses the same id every iter.
+    group.bench_function("put_record_replace_existing", |b| {
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        // Seed one record; every iter overwrites this exact id.
+        let seed = DnsRecord::new(
+            "replace.test".to_string(),
+            300,
+            "IN".to_string(),
+            RecordData::A {
+                ip: Ipv4Addr::new(10, 0, 0, 1),
+            },
+        );
+        let id = seed.id.clone();
+        store.put_record(&seed).unwrap();
+        let mut counter = 0u32;
+        b.iter_batched(
+            || {
+                counter = counter.wrapping_add(1);
+                // Same id, varying rdata so the serialized value isn't
+                // byte-identical (forces the hash XOR path to do real work).
+                DnsRecord {
+                    id: id.clone(),
+                    name: "replace.test".to_string(),
+                    ttl: 300,
+                    class: "IN".to_string(),
+                    data: RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, (counter >> 8) as u8, counter as u8),
+                    },
+                    created_at: seed.created_at,
+                    updated_at: chrono::Utc::now(),
+                }
+            },
+            |record| store.put_record(black_box(&record)).unwrap(),
+            BatchSize::SmallInput,
+        );
+    });
+
+    // Delete. Setup per iter: seed a record, return its id; timed routine
+    // is just the delete call. `iter_batched` charges setup time separately
+    // so the create-then-delete pair isn't conflated.
+    group.bench_function("delete_record", |b| {
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        let mut counter = 0u64;
+        b.iter_batched(
+            || {
+                counter += 1;
+                let record = DnsRecord::new(
+                    format!("del-{}.test", counter),
+                    300,
+                    "IN".to_string(),
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, 0, 1),
+                    },
+                );
+                let id = record.id.clone();
+                store.put_record(&record).unwrap();
+                id
+            },
+            |id| {
+                store.delete_record_by_id(black_box(&id)).unwrap();
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    // End-to-end `update::create_record` — the path every REST POST actually
+    // takes. Includes the read-txn `find_records_by_name` conflict scan plus
+    // the put_record write txn. The gap between this and `put_record_insert_new`
+    // is the cost of the conflict check.
+    group.bench_function("create_record_end_to_end", |b| {
+        let rt = Runtime::new().unwrap();
+        let dir = tempdir().unwrap();
+        let store = Arc::new(LmdbStore::open(dir.path()).unwrap());
+        let mut counter = 0u64;
+        b.iter(|| {
+            counter += 1;
+            let name = format!("e2e-{}.test", counter);
+            rt.block_on(async {
+                update::create_record(
+                    Arc::clone(&store),
+                    name,
+                    300,
+                    "IN".to_string(),
+                    RecordData::A {
+                        ip: Ipv4Addr::new(10, 0, 0, 1),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            });
+        });
+    });
+
+    // Scaling: single insert into a pre-seeded env of N records. The btree
+    // depth grows as log(N) so insert cost should trend slowly upward. If
+    // the gap between N=0 and N=10k is >2×, something else is going on
+    // (page split storms, fsync stalls).
+    //
+    // Seed cost lives outside the bench, so the measured column is "single
+    // insert with N records already present".
+    for &seed_count in &[0usize, 1_000, 10_000] {
+        let dir = tempdir().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        for record in seeded_records(seed_count) {
+            store.put_record(&record).unwrap();
+        }
+        let mut counter = 0u64;
+        group.bench_with_input(
+            BenchmarkId::new("put_record_at_size", seed_count),
+            &seed_count,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        counter += 1;
+                        DnsRecord::new(
+                            format!("probe-{}.test", counter),
+                            300,
+                            "IN".to_string(),
+                            RecordData::A {
+                                ip: Ipv4Addr::new(10, 0, 0, 1),
+                            },
+                        )
+                    },
+                    |record| store.put_record(black_box(&record)).unwrap(),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+        // `dir` and `store` drop at end of loop iteration — the bench above
+        // ran synchronously, no lingering references.
+    }
 
     group.finish();
 }
