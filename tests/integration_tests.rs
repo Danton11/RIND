@@ -155,6 +155,22 @@ async fn all_record_types_round_trip() {
             json!({"name": "txt.rt.test", "ttl": 300, "class": "IN", "type": "TXT", "strings": ["v=spf1 -all"]}),
             16,
         ),
+        (
+            json!({
+                "name": "soa.rt.test", "ttl": 3600, "class": "IN", "type": "SOA",
+                "mname": "ns1.rt.test", "rname": "hostmaster.rt.test",
+                "serial": 2026041401_u32, "refresh": 7200, "retry": 3600,
+                "expire": 1209600, "minimum": 300,
+            }),
+            6,
+        ),
+        (
+            json!({
+                "name": "_sip._tcp.rt.test", "ttl": 300, "class": "IN", "type": "SRV",
+                "priority": 10, "weight": 5, "port": 5060, "target": "sipserver.rt.test",
+            }),
+            33,
+        ),
     ];
 
     for (body, qtype) in cases {
@@ -336,6 +352,56 @@ async fn cname_exclusivity_enforced_on_both_directions() {
         }))
         .await;
     assert_eq!(resp.status().as_u16(), 409, "CNAME-over-A must 409");
+}
+
+/// SOA is a singleton at a name — a second SOA must 409 exactly like A/AAAA.
+#[tokio::test]
+async fn soa_singleton_enforced() {
+    let h = TestHarness::spawn().await;
+
+    let resp = h
+        .post_record(json!({
+            "name": "zone.test", "ttl": 3600, "class": "IN", "type": "SOA",
+            "mname": "ns1.zone.test", "rname": "hostmaster.zone.test",
+            "serial": 1_u32, "refresh": 7200, "retry": 3600, "expire": 1209600, "minimum": 300,
+        }))
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = h
+        .post_record(json!({
+            "name": "zone.test", "ttl": 3600, "class": "IN", "type": "SOA",
+            "mname": "ns2.zone.test", "rname": "hostmaster.zone.test",
+            "serial": 2_u32, "refresh": 7200, "retry": 3600, "expire": 1209600, "minimum": 300,
+        }))
+        .await;
+    assert_eq!(resp.status().as_u16(), 409, "second SOA must 409");
+}
+
+/// SRV is an RRSet type — multiple records at the same owner name are legal
+/// (priority/weight distinguish them), and a query returns all of them.
+#[tokio::test]
+async fn srv_rrset_returns_all_answers() {
+    let h = TestHarness::spawn().await;
+    let name = "_sip._tcp.srvset.test";
+
+    for (priority, target) in [(10, "sip1.srvset.test"), (20, "sip2.srvset.test")] {
+        let resp = h
+            .post_record(json!({
+                "name": name, "ttl": 300, "class": "IN", "type": "SRV",
+                "priority": priority, "weight": 5, "port": 5060, "target": target,
+            }))
+            .await;
+        assert!(resp.status().is_success(), "SRV POST failed");
+    }
+
+    let response = h.query(name, 33).await;
+    assert_eq!(rcode(&response), 0);
+    assert_eq!(ancount(&response), 2, "both SRV records should answer");
+    // Both port numbers (5060) should appear on the wire as u16 BE.
+    let port_be = 5060u16.to_be_bytes();
+    let port_hits = response.windows(2).filter(|w| *w == port_be).count();
+    assert!(port_hits >= 2, "port 5060 should appear in both RRs");
 }
 
 /// RFC 4343: DNS name comparison is case-insensitive. Storage canonicalizes

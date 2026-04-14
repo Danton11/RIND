@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- `SOA` and `SRV` record types are now served end-to-end. REST accepts the
+  full RFC 1035 §3.3.13 SOA tuple (`mname`, `rname`, `serial`, `refresh`,
+  `retry`, `expire`, `minimum`) and the RFC 2782 SRV tuple (`priority`,
+  `weight`, `port`, `target`). SOA is enforced as a singleton per name;
+  SRV is an RRSet, so multiple records at the same owner name coexist and
+  all return in a single answer section.
 - New `LmdbStore::put_records_batch(&[DnsRecord])` writes N records in one
   `RwTxn` and commits once. Each record still produces its own version bump
   and changelog entry, so the log stays one-entry-per-mutation — but the

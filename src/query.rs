@@ -12,16 +12,18 @@ pub async fn handle_query(query: DnsQuery, store: Arc<LmdbStore>) -> Vec<u8> {
 }
 
 /// Map a wire qtype code to the string name of a `RecordData` variant.
-/// Returns `None` for types we don't currently serve (e.g. SOA, SRV, CAA).
+/// Returns `None` for types we don't currently serve (e.g. CAA).
 fn qtype_to_name(qtype: u16) -> Option<&'static str> {
     match qtype {
         1 => Some("A"),
         2 => Some("NS"),
         5 => Some("CNAME"),
+        6 => Some("SOA"),
         12 => Some("PTR"),
         15 => Some("MX"),
         16 => Some("TXT"),
         28 => Some("AAAA"),
+        33 => Some("SRV"),
         _ => None,
     }
 }
