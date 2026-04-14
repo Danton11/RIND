@@ -155,6 +155,22 @@ async fn all_record_types_round_trip() {
             json!({"name": "txt.rt.test", "ttl": 300, "class": "IN", "type": "TXT", "strings": ["v=spf1 -all"]}),
             16,
         ),
+        (
+            json!({
+                "name": "soa.rt.test", "ttl": 3600, "class": "IN", "type": "SOA",
+                "mname": "ns1.rt.test", "rname": "hostmaster.rt.test",
+                "serial": 2026041401_u32, "refresh": 7200, "retry": 3600,
+                "expire": 1209600, "minimum": 300,
+            }),
+            6,
+        ),
+        (
+            json!({
+                "name": "_sip._tcp.rt.test", "ttl": 300, "class": "IN", "type": "SRV",
+                "priority": 10, "weight": 5, "port": 5060, "target": "sipserver.rt.test",
+            }),
+            33,
+        ),
     ];
 
     for (body, qtype) in cases {
@@ -336,6 +352,117 @@ async fn cname_exclusivity_enforced_on_both_directions() {
         }))
         .await;
     assert_eq!(resp.status().as_u16(), 409, "CNAME-over-A must 409");
+}
+
+/// SOA is a singleton at a name — a second SOA must 409 exactly like A/AAAA.
+#[tokio::test]
+async fn soa_singleton_enforced() {
+    let h = TestHarness::spawn().await;
+
+    let resp = h
+        .post_record(json!({
+            "name": "zone.test", "ttl": 3600, "class": "IN", "type": "SOA",
+            "mname": "ns1.zone.test", "rname": "hostmaster.zone.test",
+            "serial": 1_u32, "refresh": 7200, "retry": 3600, "expire": 1209600, "minimum": 300,
+        }))
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = h
+        .post_record(json!({
+            "name": "zone.test", "ttl": 3600, "class": "IN", "type": "SOA",
+            "mname": "ns2.zone.test", "rname": "hostmaster.zone.test",
+            "serial": 2_u32, "refresh": 7200, "retry": 3600, "expire": 1209600, "minimum": 300,
+        }))
+        .await;
+    assert_eq!(resp.status().as_u16(), 409, "second SOA must 409");
+}
+
+/// SRV is an RRSet type — multiple records at the same owner name are legal
+/// (priority/weight distinguish them), and a query returns all of them.
+#[tokio::test]
+async fn srv_rrset_returns_all_answers() {
+    let h = TestHarness::spawn().await;
+    let name = "_sip._tcp.srvset.test";
+
+    for (priority, target) in [(10, "sip1.srvset.test"), (20, "sip2.srvset.test")] {
+        let resp = h
+            .post_record(json!({
+                "name": name, "ttl": 300, "class": "IN", "type": "SRV",
+                "priority": priority, "weight": 5, "port": 5060, "target": target,
+            }))
+            .await;
+        assert!(resp.status().is_success(), "SRV POST failed");
+    }
+
+    let response = h.query(name, 33).await;
+    assert_eq!(rcode(&response), 0);
+    assert_eq!(ancount(&response), 2, "both SRV records should answer");
+    // Both port numbers (5060) should appear on the wire as u16 BE.
+    let port_be = 5060u16.to_be_bytes();
+    let port_hits = response.windows(2).filter(|w| *w == port_be).count();
+    assert!(port_hits >= 2, "port 5060 should appear in both RRs");
+}
+
+/// RFC 4343: DNS name comparison is case-insensitive. Storage canonicalizes
+/// via `canonical_name`, so a record written as `Example.COM` must resolve
+/// when queried as `example.com` and vice versa. The wire answer echoes the
+/// question name as-sent, which is also RFC-compliant.
+#[tokio::test]
+async fn case_insensitive_name_matching() {
+    let h = TestHarness::spawn().await;
+
+    // Stored lowercase, queried uppercase.
+    h.create_a("lower.case.test", "10.0.0.1").await;
+    let response = h.query_a("LOWER.CASE.TEST").await;
+    assert_eq!(rcode(&response), 0, "uppercase query must resolve");
+    assert_eq!(ancount(&response), 1);
+    assert!(
+        response.windows(4).any(|w| w == [10, 0, 0, 1]),
+        "rdata must reach the wire"
+    );
+
+    // Stored mixed-case, queried with different mixed-case.
+    let resp = h
+        .post_record(json!({
+            "name": "MiXeD.Case.Test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "10.0.0.2",
+        }))
+        .await;
+    assert!(resp.status().is_success(), "mixed-case POST must succeed");
+
+    let response = h.query_a("mixed.CASE.test").await;
+    assert_eq!(rcode(&response), 0);
+    assert_eq!(ancount(&response), 1);
+    assert!(response.windows(4).any(|w| w == [10, 0, 0, 2]));
+}
+
+/// A second POST that differs only in case must collide with the first on
+/// the canonical index — otherwise the singleton invariant for A records
+/// would be trivially bypassable by varying case.
+#[tokio::test]
+async fn duplicate_detection_is_case_insensitive() {
+    let h = TestHarness::spawn().await;
+
+    h.create_a("dup.test", "1.1.1.1").await;
+
+    let resp = h
+        .post_record(json!({
+            "name": "DUP.TEST",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "1.1.1.1",
+        }))
+        .await;
+    assert_eq!(
+        resp.status().as_u16(),
+        409,
+        "case-variant duplicate must 409"
+    );
 }
 
 #[tokio::test]
