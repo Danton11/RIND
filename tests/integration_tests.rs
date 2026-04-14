@@ -338,6 +338,67 @@ async fn cname_exclusivity_enforced_on_both_directions() {
     assert_eq!(resp.status().as_u16(), 409, "CNAME-over-A must 409");
 }
 
+/// RFC 4343: DNS name comparison is case-insensitive. Storage canonicalizes
+/// via `canonical_name`, so a record written as `Example.COM` must resolve
+/// when queried as `example.com` and vice versa. The wire answer echoes the
+/// question name as-sent, which is also RFC-compliant.
+#[tokio::test]
+async fn case_insensitive_name_matching() {
+    let h = TestHarness::spawn().await;
+
+    // Stored lowercase, queried uppercase.
+    h.create_a("lower.case.test", "10.0.0.1").await;
+    let response = h.query_a("LOWER.CASE.TEST").await;
+    assert_eq!(rcode(&response), 0, "uppercase query must resolve");
+    assert_eq!(ancount(&response), 1);
+    assert!(
+        response.windows(4).any(|w| w == [10, 0, 0, 1]),
+        "rdata must reach the wire"
+    );
+
+    // Stored mixed-case, queried with different mixed-case.
+    let resp = h
+        .post_record(json!({
+            "name": "MiXeD.Case.Test",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "10.0.0.2",
+        }))
+        .await;
+    assert!(resp.status().is_success(), "mixed-case POST must succeed");
+
+    let response = h.query_a("mixed.CASE.test").await;
+    assert_eq!(rcode(&response), 0);
+    assert_eq!(ancount(&response), 1);
+    assert!(response.windows(4).any(|w| w == [10, 0, 0, 2]));
+}
+
+/// A second POST that differs only in case must collide with the first on
+/// the canonical index — otherwise the singleton invariant for A records
+/// would be trivially bypassable by varying case.
+#[tokio::test]
+async fn duplicate_detection_is_case_insensitive() {
+    let h = TestHarness::spawn().await;
+
+    h.create_a("dup.test", "1.1.1.1").await;
+
+    let resp = h
+        .post_record(json!({
+            "name": "DUP.TEST",
+            "ttl": 300,
+            "class": "IN",
+            "type": "A",
+            "ip": "1.1.1.1",
+        }))
+        .await;
+    assert_eq!(
+        resp.status().as_u16(),
+        409,
+        "case-variant duplicate must 409"
+    );
+}
+
 #[tokio::test]
 async fn sustained_load() {
     let h = TestHarness::spawn().await;
