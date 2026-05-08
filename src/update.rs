@@ -560,7 +560,7 @@ pub async fn list_records(
     }
 
     let mut all_records = store.list_all_records()?;
-    all_records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    all_records.sort_by_key(|r| r.created_at);
 
     let total = all_records.len();
     let start_index = (page - 1) * per_page;
