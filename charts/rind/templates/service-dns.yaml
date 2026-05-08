@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rind.fullname" . }}-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dns
+  {{- with .Values.service.dns.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.dns.type }}
+  selector:
+    {{- include "rind.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dns
+      port: {{ .Values.service.dns.port }}
+      targetPort: 12312
+      protocol: UDP
+      {{- if and (eq .Values.service.dns.type "NodePort") .Values.service.dns.nodePort }}
+      nodePort: {{ .Values.service.dns.nodePort }}
+      {{- end }}

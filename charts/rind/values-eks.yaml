@@ -1,0 +1,49 @@
+# values-eks.yaml — production deployment on EKS
+# Usage: helm install rind ./charts/rind -n rind-system --create-namespace -f charts/rind/values-eks.yaml
+
+replicaCount: 2
+
+image:
+  repository: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/rind
+  tag: latest
+  pullPolicy: Always
+
+service:
+  dns:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "external"
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+  api:
+    type: ClusterIP
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "200m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+persistence:
+  enabled: true
+  storageClass: gp3
+  size: 1Gi
+
+serviceAccount:
+  create: true
+  name: rind-sa
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/rind-irsa-role"
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 10s

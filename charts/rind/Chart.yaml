@@ -1,0 +1,12 @@
+apiVersion: v2
+name: rind
+description: Kubernetes-native DNS server with CRD-based record management
+type: application
+version: 0.1.0
+keywords:
+  - dns
+  - kubernetes
+  - crd
+home: https://github.com/Danton11/RIND
+maintainers:
+  - name: Dan Benton

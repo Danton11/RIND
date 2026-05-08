@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rind-controller
+  namespace: rind-system
+  labels:
+    app.kubernetes.io/name: rind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rind-controller
+subjects:
+  - kind: ServiceAccount
+    name: rind-sa
+    namespace: rind-system

@@ -1,0 +1,17 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rind-controller
+  namespace: rind-system
+  labels:
+    app.kubernetes.io/name: rind
+rules:
+  - apiGroups: ["dns.rind.dev"]
+    resources: ["dnsrecords"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["dns.rind.dev"]
+    resources: ["dnsrecords/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]

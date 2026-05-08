@@ -1,0 +1,114 @@
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: web-a-record
+  namespace: rind-system
+spec:
+  name: www.example.com
+  ttl: 300
+  class: IN
+  recordData:
+    type: A
+    ip: "10.0.1.50"
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: api-a-record
+  namespace: rind-system
+spec:
+  name: api.example.com
+  ttl: 60
+  class: IN
+  recordData:
+    type: A
+    ip: "10.0.1.100"
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: www-cname
+  namespace: rind-system
+spec:
+  name: app.example.com
+  ttl: 3600
+  class: IN
+  recordData:
+    type: CNAME
+    target: www.example.com
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: mail-mx
+  namespace: rind-system
+spec:
+  name: example.com
+  ttl: 3600
+  class: IN
+  recordData:
+    type: MX
+    preference: 10
+    exchange: mail.example.com
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: spf-txt
+  namespace: rind-system
+spec:
+  name: example.com
+  ttl: 300
+  class: IN
+  recordData:
+    type: TXT
+    strings:
+      - "v=spf1 include:_spf.example.com ~all"
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: ns1-record
+  namespace: rind-system
+spec:
+  name: example.com
+  ttl: 86400
+  class: IN
+  recordData:
+    type: NS
+    target: ns1.example.com
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: zone-soa
+  namespace: rind-system
+spec:
+  name: example.com
+  ttl: 3600
+  class: IN
+  recordData:
+    type: SOA
+    mname: ns1.example.com
+    rname: hostmaster.example.com
+    serial: 2026050801
+    refresh: 7200
+    retry: 3600
+    expire: 1209600
+    minimum: 300
+---
+apiVersion: dns.rind.dev/v1alpha1
+kind: DnsRecord
+metadata:
+  name: sip-srv
+  namespace: rind-system
+spec:
+  name: _sip._tcp.example.com
+  ttl: 300
+  class: IN
+  recordData:
+    type: SRV
+    priority: 10
+    weight: 5
+    port: 5060
+    target: sipserver.example.com

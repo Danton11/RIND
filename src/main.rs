@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use log::{error, info};
-use rind::instance::{build_instance, InstanceConfig};
+use rind::instance::{build_instance, InstanceConfig, RindMode};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Directory that holds the LMDB environment. `RIND_LMDB_PATH` wins;
@@ -124,7 +124,11 @@ async fn main() {
     let server_id =
         std::env::var("SERVER_ID").unwrap_or_else(|_| format!("dns-server-{}", std::process::id()));
 
-    info!("Starting DNS server with server ID: {}", server_id);
+    let mode = RindMode::from_env();
+    info!(
+        "Starting DNS server with server ID: {}, mode: {:?}",
+        server_id, mode
+    );
 
     let cfg = InstanceConfig {
         dns_bind,
@@ -132,6 +136,7 @@ async fn main() {
         lmdb_path: get_lmdb_path(),
         server_id,
         metrics_bind: Some(metrics_bind),
+        mode,
     };
 
     let instance = match build_instance(cfg).await {

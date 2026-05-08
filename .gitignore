@@ -38,3 +38,20 @@ dns_records.jsonl
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Generated deploy overlays (eks-setup.sh creates these at runtime)
+k8s/overlays/eks/.deploy/
+
+# Python cache
+__pycache__/
+
+# Profiling artifacts
+perf.data
+perf.data.old
+
+# Local zips
+*.zip
+
+# Project-local CI tooling cache (kubeconform binary etc, populated by
+# scripts/ci-local.sh on first run)
+/.ci-tools/

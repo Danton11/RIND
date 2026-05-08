@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - hpa.yaml
+
+patches:
+  - path: deployment-patch.yaml
+  - path: service-dns-patch.yaml
+  - path: serviceaccount-patch.yaml
+
+# `images:` is rewritten at deploy time by scripts/eks-setup.sh into
+# `k8s/overlays/eks/.deploy/kustomization.yaml` with the actual ECR
+# account/region. A bare `kubectl apply -k k8s/overlays/eks/` is intentionally
+# non-applyable — use scripts/eks-setup.sh instead.
+images:
+  - name: rind
+    newName: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/rind
+    newTag: latest

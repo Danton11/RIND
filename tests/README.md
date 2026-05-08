@@ -28,11 +28,30 @@ cargo bench --bench dns_benchmarks            # criterion benches
 ### Integration tests
 - `integration_tests.rs` — end-to-end through a real in-process RIND
   instance via `common::harness::TestHarness` (ephemeral DNS + REST ports,
-  fresh LMDB tempdir). Runs in ~1s, no `#[ignore]`, no docker.
+  fresh LMDB tempdir). Runs in ~1s, no `#[ignore]`, no docker. Includes
+  `/health` readiness-gating tests that flip the `ready` flag the harness
+  exposes.
+
+### Kubernetes-feature tests (built only with `--features kubernetes`)
+- `src/crd.rs` — `CrdRecordData` ↔ `RecordData` round-trips for all 9
+  record types, plus drift tests asserting `EXPECTED_RECORD_TYPES` matches
+  both the Rust enum and the YAML CRD schemas (kustomize and Helm).
+- `src/update.rs::validate_against_store_tests` — the shared validator
+  used by both the standalone CRUD path and the kubernetes REST shim
+  (singleton dup, RRSet rules, CNAME exclusivity, `exclude_id` semantics).
+
+### Cluster integration (out-of-process)
+- `scripts/test-migrate-to-crd.sh` — fixture test for the migration
+  script. Pipes one record per supported type and asserts type-specific
+  fields render correctly.
+- `scripts/ci-local.sh smoke` — full k3d cluster smoke: brings up the
+  cluster, applies sample records, asserts dig answers for all 9 record
+  types, exercises REST POST → CRD → DNS roundtrip + CNAME-over-A 409.
+  Mirrors the `k3d-smoke` job in `.github/workflows/ci.yml`.
 
 ### Shared helpers
-- `common/harness.rs` — `TestHarness::spawn()` + query/create helpers
-- `common/mod.rs` — `InMemoryDatastoreProvider` stub for handler tests
+- `common/harness.rs` — `TestHarness::spawn()` + query/create helpers,
+  plus the `ready: Arc<AtomicBool>` flag for `/health` tests.
 
 ### Benchmarks
 - `benches/dns_benchmarks.rs` — packet parsing (~100ns) and response building (~520ns)

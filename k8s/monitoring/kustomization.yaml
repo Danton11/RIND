@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - servicemonitor.yaml
+  - canary-servicemonitor.yaml
+
+# Generate a ConfigMap from dashboard JSON files.
+# The label grafana_dashboard=1 tells the Grafana sidecar to auto-import them.
+configMapGenerator:
+  - name: rind-dashboards
+    files:
+      - dashboards/dns-overview.json
+      - dashboards/dns-protocol.json
+      - dashboards/dns-record-management.json
+      - dashboards/dns-errors.json
+      - dashboards/rind-system-metrics.json
+      - dashboards/dns-infrastructure-dashboard.json
+
+generatorOptions:
+  labels:
+    grafana_dashboard: "1"
+  disableNameSuffixHash: true

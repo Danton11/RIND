@@ -1,6 +1,9 @@
 # Multi-stage build for optimal image size
 FROM rust:1.88-slim AS builder
 
+# Optional: pass "kubernetes" to build with CRD watcher support
+ARG FEATURES=""
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -20,7 +23,7 @@ RUN mkdir -p src/bin benches tests && \
     echo "fn main() {}" > src/bin/add_records.rs && \
     echo "fn main() {}" > src/bin/test_runner.rs && \
     echo "fn main() {}" > benches/dns_benchmarks.rs && \
-    cargo build --release && \
+    if [ -n "$FEATURES" ]; then cargo build --release --features "$FEATURES"; else cargo build --release; fi && \
     rm -rf src benches
 
 # Copy actual source code
@@ -33,11 +36,16 @@ COPY tests ./tests
 # than the dummy binary built above — cargo then thinks nothing changed.
 # `touch` forces the real build to run.
 RUN find src benches tests -name '*.rs' -exec touch {} + && \
-    cargo build --release
+    if [ -n "$FEATURES" ]; then cargo build --release --features "$FEATURES"; else cargo build --release; fi
 
 # Build utilities
-RUN cargo build --release --bin add_records
-RUN cargo build --release --bin test_runner
+RUN if [ -n "$FEATURES" ]; then \
+      cargo build --release --bin add_records --features "$FEATURES" && \
+      cargo build --release --bin test_runner --features "$FEATURES"; \
+    else \
+      cargo build --release --bin add_records && \
+      cargo build --release --bin test_runner; \
+    fi
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -48,7 +56,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user
-RUN useradd -r -s /bin/false -m -d /app appuser
+RUN useradd -r -u 65532 -s /bin/false -m -d /app appuser
 
 # Set working directory
 WORKDIR /app
