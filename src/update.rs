@@ -41,6 +41,23 @@ pub enum RecordData {
     Txt {
         strings: Vec<String>,
     },
+    #[serde(rename = "SOA")]
+    Soa {
+        mname: String,
+        rname: String,
+        serial: u32,
+        refresh: u32,
+        retry: u32,
+        expire: u32,
+        minimum: u32,
+    },
+    #[serde(rename = "SRV")]
+    Srv {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String,
+    },
 }
 
 impl RecordData {
@@ -54,6 +71,8 @@ impl RecordData {
             RecordData::Ns { .. } => 2,
             RecordData::Mx { .. } => 15,
             RecordData::Txt { .. } => 16,
+            RecordData::Soa { .. } => 6,
+            RecordData::Srv { .. } => 33,
         }
     }
 
@@ -67,6 +86,8 @@ impl RecordData {
             RecordData::Ns { .. } => "NS",
             RecordData::Mx { .. } => "MX",
             RecordData::Txt { .. } => "TXT",
+            RecordData::Soa { .. } => "SOA",
+            RecordData::Srv { .. } => "SRV",
         }
     }
 
@@ -92,8 +113,12 @@ impl RecordData {
             RecordData::A { .. }
             | RecordData::Aaaa { .. }
             | RecordData::Cname { .. }
-            | RecordData::Ptr { .. } => false,
-            RecordData::Ns { .. } | RecordData::Mx { .. } | RecordData::Txt { .. } => true,
+            | RecordData::Ptr { .. }
+            | RecordData::Soa { .. } => false,
+            RecordData::Ns { .. }
+            | RecordData::Mx { .. }
+            | RecordData::Txt { .. }
+            | RecordData::Srv { .. } => true,
         }
     }
 
@@ -119,6 +144,21 @@ impl RecordData {
                             s.len()
                         )));
                     }
+                }
+                Ok(())
+            }
+            RecordData::Soa { mname, rname, .. } => {
+                if mname.is_empty() {
+                    return Err(ValidationError::MissingField("SOA mname".to_string()));
+                }
+                if rname.is_empty() {
+                    return Err(ValidationError::MissingField("SOA rname".to_string()));
+                }
+                Ok(())
+            }
+            RecordData::Srv { target, .. } => {
+                if target.is_empty() {
+                    return Err(ValidationError::MissingField("SRV target".to_string()));
                 }
                 Ok(())
             }

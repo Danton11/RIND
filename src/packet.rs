@@ -207,6 +207,46 @@ pub fn build_response(
                     response.extend(&preference.to_be_bytes());
                     response.extend(&encoded);
                 }
+                RecordData::Soa {
+                    mname,
+                    rname,
+                    serial,
+                    refresh,
+                    retry,
+                    expire,
+                    minimum,
+                } => {
+                    // RFC 1035 §3.3.13: MNAME + RNAME (uncompressed domain
+                    // names) then five u32 fields. No pointer compression —
+                    // encoder doesn't track offsets.
+                    let enc_mname = encode_name(mname);
+                    let enc_rname = encode_name(rname);
+                    let rdlen = enc_mname.len() + enc_rname.len() + 20;
+                    response.extend(&(rdlen as u16).to_be_bytes()); // RDLENGTH
+                    response.extend(&enc_mname);
+                    response.extend(&enc_rname);
+                    response.extend(&serial.to_be_bytes());
+                    response.extend(&refresh.to_be_bytes());
+                    response.extend(&retry.to_be_bytes());
+                    response.extend(&expire.to_be_bytes());
+                    response.extend(&minimum.to_be_bytes());
+                }
+                RecordData::Srv {
+                    priority,
+                    weight,
+                    port,
+                    target,
+                } => {
+                    // RFC 2782: three u16 fields then uncompressed target.
+                    // Clients sort by (priority, weight); we don't.
+                    let enc_target = encode_name(target);
+                    let rdlen = 6 + enc_target.len();
+                    response.extend(&(rdlen as u16).to_be_bytes()); // RDLENGTH
+                    response.extend(&priority.to_be_bytes());
+                    response.extend(&weight.to_be_bytes());
+                    response.extend(&port.to_be_bytes());
+                    response.extend(&enc_target);
+                }
                 RecordData::Txt { strings } => {
                     // RFC 1035 §3.3.14: RDATA is one or more <character-string>.
                     // Each character-string is a 1-octet length followed by
