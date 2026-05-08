@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check, Lint & Test
+  rust:
+    name: Rust (fmt + clippy + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +25,230 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
-      - name: Clippy
+      - name: Clippy (default)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Tests
+      - name: Clippy (kubernetes)
+        run: cargo clippy --all-targets --features kubernetes -- -D warnings
+
+      - name: Tests (default)
         run: cargo test
+
+      - name: Tests (kubernetes)
+        run: cargo test --features kubernetes
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      # Scoped to scripts owned by this project's kubernetes work. Legacy
+      # docker-compose scripts have pre-existing warnings out of scope here.
+      - name: Run shellcheck
+        working-directory: scripts
+        run: |
+          shellcheck \
+            ci-local.sh \
+            eks-setup.sh \
+            install-prereqs.sh \
+            k3d-setup.sh \
+            migrate-to-crd.sh \
+            test-migrate-to-crd.sh
+
+      - name: Run migrate-to-crd fixture test
+        run: bash scripts/test-migrate-to-crd.sh
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: terraform fmt
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      # `init -backend=false` skips remote-state config but still downloads
+      # providers, which `validate` needs. We don't run plan/apply in CI.
+      - name: terraform init (no backend)
+        working-directory: terraform
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+  manifests:
+    name: K8s manifests (kustomize + helm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Helm lint
+        run: helm lint charts/rind
+
+      # `kubeconform` validates against the upstream OpenAPI schemas. The
+      # DnsRecord CRD isn't in those schemas, so we skip its instances and
+      # let the kustomize/helm step below cover the CRD itself.
+      - name: Helm template + kubeconform
+        run: |
+          helm template rind charts/rind \
+            | kubeconform -strict -summary -skip DnsRecord -ignore-missing-schemas
+
+      - name: Kustomize render base
+        run: kubectl kustomize k8s/base/ > /tmp/base.yaml && head -1 /tmp/base.yaml
+
+      - name: Kustomize render k3d overlay + kubeconform
+        run: |
+          kubectl kustomize k8s/overlays/k3d/ \
+            | kubeconform -strict -summary -skip DnsRecord -ignore-missing-schemas
+
+      # The EKS overlay intentionally references a placeholder ECR image
+      # that's rewritten at deploy time by scripts/eks-setup.sh. We still
+      # validate that the rendered YAML is structurally well-formed.
+      - name: Kustomize render eks overlay (structural only)
+        run: |
+          kubectl kustomize k8s/overlays/eks/ \
+            | kubeconform -summary -skip DnsRecord -ignore-missing-schemas
+
+  k3d-smoke:
+    name: k3d cluster smoke
+    runs-on: ubuntu-latest
+    needs: [rust, manifests]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k3d + kubectl
+        run: |
+          curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | sudo bash
+          sudo curl -sfLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo chmod +x /usr/local/bin/kubectl
+
+      # Build the rind:k8s image with buildx + GHA layer cache so re-runs
+      # don't burn 5+ minutes recompiling kube-rs from scratch. `--load`
+      # exports the result to the local docker daemon so k3d can import it.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build rind:k8s with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: FEATURES=kubernetes
+          tags: rind:k8s
+          load: true
+          cache-from: type=gha,scope=rind-k8s
+          cache-to: type=gha,mode=max,scope=rind-k8s
+
+      - name: Bring up cluster (skip rebuild)
+        env:
+          RIND_SKIP_BUILD: "1"
+        run: ./scripts/k3d-setup.sh setup
+
+      - name: Apply sample records
+        run: kubectl apply -f k8s/examples/sample-records.yaml
+
+      - name: Wait for CRDs to sync
+        run: |
+          for _ in $(seq 1 30); do
+            unsynced=$(kubectl get dnsrecord -n rind-system \
+              -o json | jq '[.items[] | select(.status.synced != true)] | length')
+            if [ "$unsynced" = "0" ]; then echo "all synced"; exit 0; fi
+            sleep 1
+          done
+          echo "CRDs failed to sync within 30s" >&2
+          kubectl get dnsrecord -n rind-system
+          exit 1
+
+      - name: dig all 9 record types
+        run: |
+          set -e
+          assert_resolves() {
+            local name="$1" qtype="$2" expected="$3"
+            local actual
+            actual=$(dig @localhost -p 30053 "$name" "$qtype" +short)
+            if [[ "$actual" != *"$expected"* ]]; then
+              echo "FAIL $qtype $name: expected '$expected', got '$actual'" >&2
+              exit 1
+            fi
+            echo "OK   $qtype $name -> $actual"
+          }
+          assert_resolves www.example.com           A     "10.0.1.50"
+          assert_resolves api.example.com           A     "10.0.1.100"
+          assert_resolves example.com               MX    "mail.example.com"
+          assert_resolves example.com               NS    "ns1.example.com"
+          assert_resolves example.com               TXT   "v=spf1"
+          assert_resolves example.com               SOA   "ns1.example.com"
+          assert_resolves app.example.com           CNAME "www.example.com"
+          assert_resolves _sip._tcp.example.com     SRV   "sipserver.example.com"
+
+      - name: REST CRUD roundtrip + RRset 409
+        run: |
+          set -e
+          # Valid POST
+          status=$(curl -sS -o /tmp/post.json -w '%{http_code}' \
+            -X POST http://localhost:30080/records \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"smoke.example.com","ttl":120,"type":"A","ip":"203.0.113.99"}')
+          [ "$status" = "201" ] || { echo "POST status=$status" >&2; cat /tmp/post.json; exit 1; }
+          id=$(jq -r '.data.id' /tmp/post.json)
+          echo "created id=$id"
+
+          # CNAME-over-A must 409 (validates the kubernetes-mode RRset shim)
+          status=$(curl -sS -o /tmp/conflict.json -w '%{http_code}' \
+            -X POST http://localhost:30080/records \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"smoke.example.com","type":"CNAME","target":"foo.test"}')
+          [ "$status" = "409" ] || { echo "conflict status=$status (expected 409)" >&2; cat /tmp/conflict.json; exit 1; }
+
+          # Wait for watcher propagation, then dig
+          for _ in $(seq 1 10); do
+            actual=$(dig @localhost -p 30053 smoke.example.com +short)
+            [ "$actual" = "203.0.113.99" ] && break
+            sleep 1
+          done
+          [ "$actual" = "203.0.113.99" ] || { echo "dig got '$actual'" >&2; exit 1; }
+
+          # Delete -> NXDOMAIN
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            "http://localhost:30080/records/$id")
+          [ "$status" = "204" ] || { echo "DELETE status=$status" >&2; exit 1; }
+          for _ in $(seq 1 10); do
+            rc=$(dig @localhost -p 30053 smoke.example.com 2>&1 | awk -F': ' '/->>HEADER<<-/ {print $0}' | grep -oE 'NXDOMAIN|NOERROR' || true)
+            [ "$rc" = "NXDOMAIN" ] && break
+            sleep 1
+          done
+          [ "$rc" = "NXDOMAIN" ] || { echo "expected NXDOMAIN after delete, got $rc" >&2; exit 1; }
+
+      - name: /health returns ready
+        run: |
+          body=$(curl -sS http://localhost:30080/health)
+          echo "$body" | jq -e '.ready == true' >/dev/null
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -n rind-system -o wide || true
+          kubectl get dnsrecord -n rind-system || true
+          kubectl describe pods -n rind-system || true
+          kubectl logs -n rind-system -l app.kubernetes.io/name=rind --tail=200 || true

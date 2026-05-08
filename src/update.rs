@@ -427,6 +427,24 @@ fn check_rrset_conflict(
     Ok(())
 }
 
+/// Validate a candidate record against the local store: shape (`validate`)
+/// plus RRSet rules vs. existing neighbours at the same name. Used by both
+/// the standalone CRUD path (which then writes to LMDB) and the kubernetes
+/// REST shim (which then patches K8s). `exclude_id` is the id of the record
+/// being mutated, to skip self-conflict on update.
+pub fn validate_against_store(
+    store: &LmdbStore,
+    candidate: &DnsRecord,
+    exclude_id: Option<&str>,
+) -> Result<(), RecordError> {
+    candidate.validate().map_err(RecordError::ValidationError)?;
+    let neighbours = store.find_records_by_name(&candidate.name)?;
+    if let Err(conflict) = check_rrset_conflict(&neighbours, candidate, exclude_id) {
+        return Err(conflict.into_error(candidate));
+    }
+    Ok(())
+}
+
 // ---------- CRUD ----------
 
 /// Create a new DNS record.
@@ -701,5 +719,168 @@ async fn record_failure(
         registry_guard
             .dns_metrics()
             .record_operation_failure(op, reason, duration);
+    }
+}
+
+#[cfg(test)]
+mod validate_against_store_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn tmpstore() -> (TempDir, LmdbStore) {
+        let dir = TempDir::new().unwrap();
+        let store = LmdbStore::open(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    fn rec(name: &str, data: RecordData) -> DnsRecord {
+        DnsRecord::new(name.to_string(), 300, "IN".to_string(), data)
+    }
+
+    #[test]
+    fn empty_store_accepts_any_valid_record() {
+        let (_dir, store) = tmpstore();
+        let r = rec(
+            "fresh.test",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        validate_against_store(&store, &r, None).expect("empty store should accept");
+    }
+
+    #[test]
+    fn invalid_shape_fails_before_touching_store() {
+        let (_dir, store) = tmpstore();
+        // empty name fails the validate() shape check; should not reach the
+        // store lookup.
+        let r = rec(
+            "",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        let err = validate_against_store(&store, &r, None).unwrap_err();
+        assert!(matches!(err, RecordError::ValidationError(_)));
+    }
+
+    #[test]
+    fn singleton_duplicate_rejected() {
+        let (_dir, store) = tmpstore();
+        let first = rec(
+            "dup.test",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        store.put_record(&first).unwrap();
+
+        let second = rec(
+            "dup.test",
+            RecordData::A {
+                ip: "5.6.7.8".parse().unwrap(),
+            },
+        );
+        let err = validate_against_store(&store, &second, None).unwrap_err();
+        assert!(matches!(err, RecordError::DuplicateRecord(_)));
+    }
+
+    #[test]
+    fn cname_over_existing_a_rejected() {
+        let (_dir, store) = tmpstore();
+        let a = rec(
+            "x.test",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        store.put_record(&a).unwrap();
+
+        let cname = rec(
+            "x.test",
+            RecordData::Cname {
+                target: "y.test".to_string(),
+            },
+        );
+        let err = validate_against_store(&store, &cname, None).unwrap_err();
+        assert!(matches!(err, RecordError::DuplicateRecord(_)));
+    }
+
+    #[test]
+    fn a_over_existing_cname_rejected() {
+        let (_dir, store) = tmpstore();
+        let cname = rec(
+            "x.test",
+            RecordData::Cname {
+                target: "y.test".to_string(),
+            },
+        );
+        store.put_record(&cname).unwrap();
+
+        let a = rec(
+            "x.test",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        let err = validate_against_store(&store, &a, None).unwrap_err();
+        assert!(matches!(err, RecordError::DuplicateRecord(_)));
+    }
+
+    #[test]
+    fn rrset_distinct_values_coexist() {
+        let (_dir, store) = tmpstore();
+        let ns1 = rec(
+            "z.test",
+            RecordData::Ns {
+                target: "ns1.z.test".to_string(),
+            },
+        );
+        store.put_record(&ns1).unwrap();
+
+        let ns2 = rec(
+            "z.test",
+            RecordData::Ns {
+                target: "ns2.z.test".to_string(),
+            },
+        );
+        validate_against_store(&store, &ns2, None).expect("distinct NS targets coexist");
+    }
+
+    #[test]
+    fn rrset_exact_duplicate_rejected() {
+        let (_dir, store) = tmpstore();
+        let ns = rec(
+            "z.test",
+            RecordData::Ns {
+                target: "ns1.z.test".to_string(),
+            },
+        );
+        store.put_record(&ns).unwrap();
+
+        let dup = rec(
+            "z.test",
+            RecordData::Ns {
+                target: "ns1.z.test".to_string(),
+            },
+        );
+        let err = validate_against_store(&store, &dup, None).unwrap_err();
+        assert!(matches!(err, RecordError::DuplicateRecord(_)));
+    }
+
+    #[test]
+    fn exclude_id_skips_self_conflict() {
+        let (_dir, store) = tmpstore();
+        let a = rec(
+            "self.test",
+            RecordData::A {
+                ip: "1.2.3.4".parse().unwrap(),
+            },
+        );
+        store.put_record(&a).unwrap();
+
+        // Updating the same record (same id, same data) should pass when the
+        // existing record is excluded — caller is mid-update.
+        validate_against_store(&store, &a, Some(&a.id)).expect("self-update must not 409");
     }
 }

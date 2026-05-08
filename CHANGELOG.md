@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+- `GET /health` returns `{"ready": <bool>}` and gates the kubelet
+  readiness probe. Standalone instances are ready as soon as LMDB opens;
+  kubernetes-mode instances stay 503 until the CRD watcher's first full
+  sync completes, so fresh pods don't serve NXDOMAIN before their cache
+  catches up. Liveness stays a TCP probe so transient etcd failures
+  don't restart-loop a healthy process.
+- Pods run hardened by default: `runAsNonRoot` UID 65532 (pinned in the
+  Dockerfile), `readOnlyRootFilesystem`, all capabilities dropped,
+  `allowPrivilegeEscalation: false`, `seccompProfile: RuntimeDefault`.
+  RBAC is a namespaced `Role`/`RoleBinding` (was a cluster-wide
+  `ClusterRole`); the unused `coordination.k8s.io/leases` rule was
+  dropped. Kubernetes-mode REST writes go through a shared
+  `validate_against_store` that mirrors the standalone RRSet rules — so
+  CNAME-over-A in kubernetes mode now returns 409 instead of 500.
+- CI gained three jobs alongside the existing rust check: a `shellcheck`
+  pass over the project's owned scripts plus the migrate-to-crd fixture
+  test, a `manifests` job that runs `helm lint`, `helm template |
+  kubeconform`, and `kustomize | kubeconform` on the base + k3d + eks
+  overlays, and a `k3d-smoke` job that brings up a real cluster, applies
+  the sample CRDs, and asserts dig answers for all 9 record types plus a
+  REST CRUD roundtrip. The rust job now also runs clippy + tests with
+  the `kubernetes` feature flag enabled.
+- `scripts/ci-local.sh` runs the same checks locally, with `rust`,
+  `shellcheck`, `manifests`, `smoke`, and `all` subcommands. The smoke
+  subcommand reuses an existing k3d cluster when one's up.
+  `scripts/install-prereqs.sh` now also installs `helm`, `shellcheck`,
+  and `jq`, and mentions `act` as an optional install for editing the
+  workflow YAML.
+- Kubernetes-native operating mode behind a `kubernetes` cargo feature.
+  `RIND_MODE=kubernetes` switches the instance from LMDB-as-source-of-truth
+  to a CRD-watcher model: each pod watches the `dns.rind.dev/v1alpha1`
+  `DnsRecord` CRD, syncs records into a local LMDB cache (full LIST on
+  startup, incremental watch + 5-min periodic resync afterward), and
+  proxies REST writes to the K8s API instead of writing LMDB directly. DNS
+  reads stay against local LMDB so the K8s API isn't in the query hot
+  path. The watcher patches `.status.synced` after each sync so
+  `kubectl get dnsrecords` shows reconciliation state. If the watcher
+  exits unrecoverably, the process exits with code 1 so the kubelet
+  restarts the pod with a clean state.
+- `k8s/` ships kustomize manifests (CRD, RBAC, Deployment, Services,
+  ConfigMap) with a shared `base` and `overlays/k3d` + `overlays/eks`.
+  `charts/rind` is the Helm equivalent for chart-based installs, with
+  `values-k3d.yaml` / `values-eks.yaml` defaults. `terraform/` provisions
+  the EKS cluster, ECR repo, IAM, and EBS CSI prerequisites, with
+  `environments/dev.tfvars` and `environments/prod.tfvars` separating
+  cluster sizes. `scripts/k3d-setup.sh` brings up a local k3d cluster end
+  to end (cluster → image build with `--build-arg FEATURES=kubernetes` →
+  import → kustomize apply); `scripts/eks-setup.sh` is the EKS analogue.
+  `scripts/migrate-to-crd.sh` exports a standalone LMDB into a YAML
+  bundle of `DnsRecord` objects for migration. `docker/Dockerfile` now
+  takes a `FEATURES` build arg so the same Dockerfile produces the
+  standalone or kubernetes-feature image without duplication.
 - `SOA` and `SRV` record types are now served end-to-end. REST accepts the
   full RFC 1035 §3.3.13 SOA tuple (`mname`, `rname`, `serial`, `refresh`,
   `retry`, `expire`, `minimum`) and the RFC 2782 SRV tuple (`priority`,

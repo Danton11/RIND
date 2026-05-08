@@ -350,6 +350,12 @@ impl MetricsRegistry {
         &self.dns_metrics
     }
 
+    /// Get reference to the underlying Prometheus registry for registering
+    /// additional collectors (e.g. watcher metrics).
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Get metrics in Prometheus text format
     pub fn gather_metrics(&self) -> Result<String, prometheus::Error> {
         let encoder = TextEncoder::new();

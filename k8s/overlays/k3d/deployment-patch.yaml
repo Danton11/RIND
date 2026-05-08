@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rind
+  namespace: rind-system
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: rind
+          image: rind:k8s
+          imagePullPolicy: Never
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"

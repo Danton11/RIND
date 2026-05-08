@@ -9,9 +9,11 @@
 //! tempdir is removed — one instance per test, fully isolated.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
-use rind::instance::{build_instance, Instance, InstanceConfig};
+use rind::instance::{build_instance, Instance, InstanceConfig, RindMode};
 use tempfile::TempDir;
 use tokio::net::UdpSocket;
 
@@ -19,6 +21,7 @@ pub struct TestHarness {
     pub dns_addr: SocketAddr,
     pub api_base: String,
     pub http: reqwest::Client,
+    pub ready: Arc<AtomicBool>,
     instance: Option<Instance>,
     // Keep tempdir alive for the lifetime of the instance. Dropped after
     // `instance` via field order — LMDB env closes before the dir vanishes.
@@ -34,18 +37,30 @@ impl TestHarness {
             lmdb_path: lmdb_dir.path().to_path_buf(),
             server_id: "test-harness".to_string(),
             metrics_bind: None,
+            mode: RindMode::Standalone,
         };
         let instance = build_instance(cfg).await.expect("build_instance");
         let dns_addr = instance.dns_addr;
         let api_base = format!("http://{}", instance.api_addr);
+        let ready = Arc::clone(&instance.ready);
 
         Self {
             dns_addr,
             api_base,
             http: reqwest::Client::new(),
+            ready,
             instance: Some(instance),
             _lmdb_dir: lmdb_dir,
         }
+    }
+
+    /// Hit `GET /health`. Returned for `.status()` / `.json()` inspection.
+    pub async fn health(&self) -> reqwest::Response {
+        self.http
+            .get(format!("{}/health", self.api_base))
+            .send()
+            .await
+            .expect("GET /health")
     }
 
     /// POST /records with an arbitrary JSON body. Returns the raw response so

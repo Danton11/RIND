@@ -1,0 +1,107 @@
+# Default values for RIND DNS server Helm chart.
+
+replicaCount: 2
+
+image:
+  repository: rind
+  tag: k8s
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+# RIND configuration (injected as env vars via ConfigMap)
+config:
+  mode: kubernetes
+  namespace: rind-system
+  dnsBind: "0.0.0.0:12312"
+  apiBind: "0.0.0.0:8080"
+  metricsPort: "9090"
+  logFormat: json
+  disableFileLogging: "true"
+  lmdbPath: "/data/lmdb"
+  resyncIntervalSecs: "300"
+
+# DNS service
+service:
+  dns:
+    type: ClusterIP
+    port: 53
+    # nodePort: 30053  # set when type=NodePort
+    annotations: {}
+  api:
+    type: ClusterIP
+    port: 80
+    # nodePort: 30080
+    annotations: {}
+  # `metrics.port` derived from `config.metricsPort` to avoid drift
+
+# Pod resources
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+
+# LMDB is a per-pod cache populated from etcd on startup, so each pod uses an
+# emptyDir. Persistent per-pod volumes would require a StatefulSet conversion
+# (volumeClaimTemplates) — tracked as future work; not needed for correctness
+# since etcd is the source of truth and initial sync is fast.
+
+
+# ServiceAccount and RBAC
+serviceAccount:
+  create: true
+  name: rind-sa
+  annotations: {}
+  # eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/rind-irsa-role"
+
+# Install the DnsRecord CRD
+crd:
+  install: true
+
+# DNS canary (continuous health checker)
+canary:
+  enabled: true
+  image:
+    repository: python
+    tag: "3.11-slim"
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "10m"
+    limits:
+      memory: "192Mi"
+      cpu: "100m"
+
+# Prometheus ServiceMonitor
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 10s
+
+# Probes. Readiness hits /health which returns 503 until the CRD watcher's
+# initial sync completes — so fresh pods don't accept DNS traffic before LMDB
+# is caught up. Liveness stays as a plain TCP check on the API port so a
+# transiently-unhealthy etcd doesn't trigger a pod restart loop.
+readinessProbe:
+  httpGet:
+    path: /health
+    port: api
+  initialDelaySeconds: 3
+  periodSeconds: 10
+
+livenessProbe:
+  tcpSocket:
+    port: api
+  initialDelaySeconds: 10
+  periodSeconds: 30

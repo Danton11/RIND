@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rind.fullname" . }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- with .Values.service.api.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.api.type }}
+  selector:
+    {{- include "rind.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.service.api.port }}
+      targetPort: 8080
+      protocol: TCP
+      {{- if and (eq .Values.service.api.type "NodePort") .Values.service.api.nodePort }}
+      nodePort: {{ .Values.service.api.nodePort }}
+      {{- end }}
+    - name: metrics
+      port: {{ .Values.config.metricsPort | int }}
+      targetPort: {{ .Values.config.metricsPort | int }}
+      protocol: TCP

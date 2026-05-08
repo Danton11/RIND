@@ -1,0 +1,9 @@
+region             = "eu-west-2"
+cluster_name       = "rind-dev"
+cluster_version    = "1.30"
+node_instance_type = "t3.small"
+node_desired_count = 2
+node_min_count     = 1
+node_max_count     = 3
+deploy_monitoring  = false
+deploy_rind        = true

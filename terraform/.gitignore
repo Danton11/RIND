@@ -1,0 +1,9 @@
+# Terraform state (should be in S3 backend for teams, local for solo dev)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Variable files with secrets
+*.auto.tfvars
+secret.tfvars

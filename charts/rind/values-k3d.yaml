@@ -1,0 +1,28 @@
+# values-k3d.yaml — local development with k3d
+# Usage: helm install rind ./charts/rind -n rind-system --create-namespace -f charts/rind/values-k3d.yaml
+
+replicaCount: 2
+
+image:
+  repository: rind
+  tag: k8s
+  pullPolicy: Never
+
+service:
+  dns:
+    type: NodePort
+    nodePort: 30053
+  api:
+    type: NodePort
+    nodePort: 30080
+
+resources:
+  requests:
+    memory: "32Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "250m"
+
+persistence:
+  enabled: false

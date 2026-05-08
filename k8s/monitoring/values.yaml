@@ -1,0 +1,27 @@
+# Helm values for prometheus-community/kube-prometheus-stack
+# Install with:
+#   helm install monitoring prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f k8s/monitoring/values.yaml
+
+# --- Grafana ---
+grafana:
+  adminPassword: rind
+  service:
+    type: NodePort
+    nodePort: 31000
+
+# --- Prometheus ---
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 31090
+  prometheusSpec:
+    # Scrape ServiceMonitors from ALL namespaces, not just the helm release namespace
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+# --- Alertmanager ---
+alertmanager:
+  service:
+    type: NodePort
+    nodePort: 31093

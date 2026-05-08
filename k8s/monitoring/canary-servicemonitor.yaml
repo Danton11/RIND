@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rind-canary
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: rind-canary
+spec:
+  namespaceSelector:
+    matchNames:
+      - rind-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rind-canary
+      app.kubernetes.io/component: canary
+  endpoints:
+    - port: metrics
+      interval: 10s
+      path: /metrics

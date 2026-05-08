@@ -495,3 +495,33 @@ async fn sustained_load() {
     assert!(queries > 100, "should get at least 100 queries in 1s");
     assert!(error_rate < 1.0, "error rate should be near zero");
 }
+
+/// Standalone instances are immediately ready — `/health` returns 200 + the
+/// `{"ready": true}` body that the kubelet probe contract relies on.
+#[tokio::test]
+async fn health_ready_when_standalone() {
+    let h = TestHarness::spawn().await;
+    let resp = h.health().await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ready"], true);
+}
+
+/// Flipping `ready` to `false` (the state a kubernetes-mode pod is in
+/// before the watcher's first sync) must surface as 503 so the readiness
+/// probe takes the pod out of rotation.
+#[tokio::test]
+async fn health_not_ready_returns_503() {
+    let h = TestHarness::spawn().await;
+    h.ready.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    let resp = h.health().await;
+    assert_eq!(resp.status().as_u16(), 503);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ready"], false);
+
+    // Flipping back recovers without restart.
+    h.ready.store(true, std::sync::atomic::Ordering::Relaxed);
+    let resp = h.health().await;
+    assert_eq!(resp.status().as_u16(), 200);
+}

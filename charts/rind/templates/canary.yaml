@@ -1,0 +1,103 @@
+{{- if .Values.canary.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rind.fullname" . }}-canary-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+data:
+  dns-canary.py: |
+{{ .Files.Get "files/dns-canary.py" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rind.fullname" . }}-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "rind.name" . }}-canary
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "rind.name" . }}-canary
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: canary
+          image: "{{ .Values.canary.image.repository }}:{{ .Values.canary.image.tag }}"
+          # `pip install` writes to site-packages, so readOnlyRootFilesystem
+          # would break this without a writable overlay. Sidecar isn't on the
+          # DNS data path; capability drop + no-privilege-escalation is enough.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install --quiet requests &&
+              python3 /scripts/dns-canary.py \
+                --dns-server={{ include "rind.fullname" . }}-dns.{{ .Release.Namespace }}.svc.cluster.local \
+                --dns-port={{ .Values.service.dns.port }} \
+                --api-server={{ include "rind.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local \
+                --api-port={{ .Values.service.api.port }} \
+                --metrics-port=8090
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+              name: metrics
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            {{- toYaml .Values.canary.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "rind.fullname" . }}-canary-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rind.fullname" . }}-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: canary
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "rind.name" . }}-canary
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: metrics
+      port: 8090
+      targetPort: 8090
+      protocol: TCP
+{{- end }}

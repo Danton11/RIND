@@ -1,0 +1,147 @@
+{{- if .Values.crd.install }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dnsrecords.dns.rind.dev
+  labels:
+    {{- include "rind.labels" . | nindent 4 }}
+spec:
+  group: dns.rind.dev
+  names:
+    plural: dnsrecords
+    singular: dnsrecord
+    kind: DnsRecord
+    shortNames:
+      - dr
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["name", "recordData"]
+              properties:
+                name:
+                  type: string
+                  description: "DNS record name (e.g. www.example.com)"
+                ttl:
+                  type: integer
+                  format: int32
+                  default: 300
+                  minimum: 0
+                  maximum: 604800
+                class:
+                  type: string
+                  default: "IN"
+                  enum: ["IN", "CH", "HS"]
+                recordData:
+                  type: object
+                  required: ["type"]
+                  properties:
+                    type:
+                      type: string
+                      enum: ["A", "AAAA", "CNAME", "PTR", "NS", "MX", "TXT", "SOA", "SRV"]
+                    ip:
+                      type: string
+                    target:
+                      type: string
+                    preference:
+                      type: integer
+                      format: int32
+                    exchange:
+                      type: string
+                    strings:
+                      type: array
+                      items:
+                        type: string
+                    mname:
+                      type: string
+                    rname:
+                      type: string
+                    serial:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      maximum: 4294967295
+                    refresh:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      maximum: 4294967295
+                    retry:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      maximum: 4294967295
+                    expire:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      maximum: 4294967295
+                    minimum:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      maximum: 4294967295
+                    priority:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                    weight:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                    port:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                  x-kubernetes-validations:
+                    - rule: "self.type == 'A' || self.type == 'AAAA' ? has(self.ip) : true"
+                      message: "ip is required for A and AAAA records"
+                    - rule: "(self.type == 'CNAME' || self.type == 'PTR' || self.type == 'NS' || self.type == 'SRV') ? has(self.target) : true"
+                      message: "target is required for CNAME, PTR, NS, and SRV records"
+                    - rule: "self.type == 'MX' ? has(self.preference) && has(self.exchange) : true"
+                      message: "preference and exchange are required for MX records"
+                    - rule: "self.type == 'TXT' ? has(self.strings) : true"
+                      message: "strings is required for TXT records"
+                    - rule: "self.type == 'SOA' ? has(self.mname) && has(self.rname) && has(self.serial) && has(self.refresh) && has(self.retry) && has(self.expire) && has(self.minimum) : true"
+                      message: "mname, rname, serial, refresh, retry, expire, and minimum are required for SOA records"
+                    - rule: "self.type == 'SRV' ? has(self.priority) && has(self.weight) && has(self.port) : true"
+                      message: "priority, weight, and port are required for SRV records"
+            status:
+              type: object
+              properties:
+                synced:
+                  type: boolean
+                lastSyncedAt:
+                  type: string
+                  format: date-time
+                error:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: "DNS Name"
+          type: string
+          jsonPath: ".spec.name"
+        - name: Type
+          type: string
+          jsonPath: ".spec.recordData.type"
+        - name: TTL
+          type: integer
+          jsonPath: ".spec.ttl"
+        - name: Synced
+          type: boolean
+          jsonPath: ".status.synced"
+        - name: Age
+          type: date
+          jsonPath: ".metadata.creationTimestamp"
+{{- end }}

@@ -1,0 +1,20 @@
+# Helm values for grafana/loki-stack
+# Install with:
+#   helm install loki grafana/loki-stack \
+#     -n monitoring -f k8s/monitoring/loki-values.yaml
+
+loki:
+  persistence:
+    enabled: false
+  config:
+    limits_config:
+      retention_period: 168h
+
+promtail:
+  enabled: true
+
+grafana:
+  enabled: false
+  sidecar:
+    datasources:
+      enabled: false

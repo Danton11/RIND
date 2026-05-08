@@ -1,0 +1,22 @@
+# ServiceMonitor tells Prometheus to scrape RIND metrics.
+# Deployed to the monitoring namespace (via kustomization.yaml) with
+# namespaceSelector targeting rind-system where the RIND services live.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rind
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: rind
+spec:
+  namespaceSelector:
+    matchNames:
+      - rind-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rind
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: metrics
+      interval: 10s
+      path: /metrics
